@@ -11,9 +11,11 @@ ghcr.io/ai4s-fiber/material-graph-openwebui:sha-<40-character-commit>
 ```
 
 GitHub organization package visibility must be configured as public once by a
-package administrator. The workflow verifies an anonymous pull and exact digest
-before succeeding. It never creates or updates `latest`. Production deployments should
-pin the registry digest returned by GHCR:
+package administrator. The workflow does not change package visibility. A separate
+read-only job, with an empty Docker credential store and no package-write or OIDC
+permission, verifies anonymous registry access, the exact digest, and the keyless
+signature before succeeding. The workflow never creates or updates `latest`.
+Production deployments should pin the registry digest returned by GHCR:
 
 ```text
 ghcr.io/ai4s-fiber/material-graph-openwebui@sha256:<digest>
@@ -24,7 +26,17 @@ OIDC. Its permissions are limited to reading source, writing the package, and
 creating provenance/SBOM attestations. No runtime API, NAS, host, deployment, or
 server credentials belong in this workflow.
 
-Each published image receives GitHub build provenance and an SPDX JSON SBOM
-attestation. The SBOM is also retained as a workflow artifact for 30 days.
-Upstream Release and PyPI workflows remain disabled and are not prerequisites
-for container publishing.
+The release build fixes the runtime identity at UID/GID `10001:10001`, pins
+`uv==0.11.32`, and initializes `/app/backend/data` with that ownership before
+declaring it as a volume. A fresh Docker named volume therefore starts writable by
+the non-root process. Existing or bind-mounted host paths must be prepared with the
+same numeric ownership before the container starts; the image never escalates to
+root to repair host permissions.
+
+Every published digest must pass a Grype gate that rejects `high` and `critical`
+findings. Passing images receive GitHub build provenance, an SPDX JSON SBOM
+attestation, and a Sigstore Cosign keyless signature bound to this workflow's GitHub
+OIDC identity. The SBOM is also retained as a workflow artifact for 30 days.
+Upstream Release and PyPI workflows remain disabled and are not prerequisites for
+container publishing. The workflow builds and publishes only; it does not deploy to
+any server.

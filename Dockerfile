@@ -19,9 +19,10 @@ ARG USE_AUXILIARY_EMBEDDING_MODEL=TaylorAI/bge-micro-v2
 ARG USE_TIKTOKEN_ENCODING_NAME="cl100k_base"
 
 ARG BUILD_HASH=dev-build
-# Override at your own risk - non-root configurations are untested
-ARG UID=0
-ARG GID=0
+# Material Graph release images run as a fixed unprivileged identity.
+ARG UID=10001
+ARG GID=10001
+ARG UV_VERSION=0.11.32
 
 ######## WebUI frontend ########
 FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
@@ -56,6 +57,7 @@ ARG USE_RERANKING_MODEL
 ARG USE_AUXILIARY_EMBEDDING_MODEL
 ARG UID
 ARG GID
+ARG UV_VERSION
 
 # Python settings
 ENV PYTHONUNBUFFERED=1
@@ -108,19 +110,18 @@ ENV HF_HOME="/app/backend/data/cache/embedding/models"
 
 WORKDIR /app/backend
 
-ENV HOME=/root
-# Create user and group if not root
-RUN if [ $UID -ne 0 ]; then \
-    if [ $GID -ne 0 ]; then \
-    addgroup --gid $GID app; \
-    fi; \
-    adduser --uid $UID --gid $GID --home $HOME --disabled-password --no-create-home app; \
-    fi
+ENV HOME=/home/app
+RUN set -eux; \
+    test "$UID" -ne 0; \
+    test "$GID" -ne 0; \
+    addgroup --gid "$GID" app; \
+    adduser --uid "$UID" --gid "$GID" --home "$HOME" --disabled-password --gecos "" app; \
+    install -d -o "$UID" -g "$GID" -m 0750 "$HOME/.cache/chroma"; \
+    install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
+    echo -n 00000000-0000-0000-0000-000000000000 > "$HOME/.cache/chroma/telemetry_user_id"; \
+    chown "$UID:$GID" "$HOME/.cache/chroma/telemetry_user_id"
 
-RUN mkdir -p $HOME/.cache/chroma
-RUN echo -n 00000000-0000-0000-0000-000000000000 > $HOME/.cache/chroma/telemetry_user_id
-
-# Make sure the user has access to the app and root directory
+# Make sure the runtime user owns the application and its home directory.
 RUN chown -R $UID:$GID /app $HOME
 
 # Install common system dependencies
@@ -139,7 +140,7 @@ COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
 ENV UV_LINK_MODE=copy
 
 RUN set -e; \
-    pip3 install --no-cache-dir uv; \
+    pip3 install --no-cache-dir "uv==${UV_VERSION}"; \
     if [ "$USE_CUDA" = "true" ]; then \
     # If you use CUDA the whisper and embedding model will be downloaded on first use
     # fix: pin torch<=2.9.1 - torch 2.10.0 aarch64 wheels cause SIGILL on ARM devices (RPi 4 Cortex-A72) #21349
@@ -161,7 +162,7 @@ RUN set -e; \
     python -c "import nltk; nltk.download('punkt_tab')"; \
     fi; \
     fi; \
-    mkdir -p /app/backend/data; chown -R $UID:$GID /app/backend/data/; \
+    install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
     rm -rf /var/lib/apt/lists/*;
 
 # Install Ollama if requested
@@ -189,15 +190,17 @@ EXPOSE 8080
 HEALTHCHECK CMD curl --silent --fail http://localhost:${PORT:-8080}/health | jq -ne 'input.status == true' || exit 1
 
 # Minimal, atomic permission hardening for OpenShift (arbitrary UID):
-# - Group 0 owns /app and /root
+# - Group 0 owns /app and the runtime home
 # - Directories are group-writable and have SGID so new files inherit GID 0
 RUN if [ "$USE_PERMISSION_HARDENING" = "true" ]; then \
     set -eux; \
-    chgrp -R 0 /app /root || true; \
-    chmod -R g+rwX /app /root || true; \
+    chgrp -R 0 /app "$HOME" || true; \
+    chmod -R g+rwX /app "$HOME" || true; \
     find /app -type d -exec chmod g+s {} + || true; \
-    find /root -type d -exec chmod g+s {} + || true; \
+    find "$HOME" -type d -exec chmod g+s {} + || true; \
     fi
+
+VOLUME ["/app/backend/data"]
 
 USER $UID:$GID
 
