@@ -37,7 +37,7 @@ def test_release_image_is_non_root_with_a_writable_data_volume() -> None:
 def test_release_image_pins_audited_base_images_and_separates_build_tools() -> None:
     dockerfile = _text(ROOT / 'Dockerfile')
 
-    for name in ('NODE_BASE', 'PYTHON_BASE', 'DEBIAN_BASE'):
+    for name in ('NODE_BASE', 'PYTHON_BASE', 'RUST_BASE', 'DEBIAN_BASE'):
         assert re.search(
             rf'^ARG {name}=[^\s]+@sha256:[0-9a-f]{{64}}$',
             dockerfile,
@@ -45,6 +45,7 @@ def test_release_image_pins_audited_base_images_and_separates_build_tools() -> N
         )
 
     assert 'AS frontend-build' in dockerfile
+    assert 'AS rust-toolchain' in dockerfile
     assert 'AS python-deps' in dockerfile
     assert 'AS runtime' in dockerfile
     assert 'backend/requirements-production.lock' in dockerfile

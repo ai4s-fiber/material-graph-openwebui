@@ -35,10 +35,11 @@ root to repair host permissions.
 
 ## Minimal production runtime
 
-The container uses separate frontend and Python dependency builders. Node, Python,
-and the Python image's Debian Trixie root are all pinned by immutable SHA-256
-digests in the Dockerfile. Only the frontend build, application source, and the
-hash-locked production virtual environment are copied into the final runtime.
+The container uses separate frontend, Rust-toolchain, and Python dependency
+builders. Node, Rust 1.88, Python, and the Python image's Debian Trixie root are
+all pinned by immutable SHA-256 digests in the Dockerfile. Only the frontend
+build, application source, and the hash-locked production virtual environment
+are copied into the final runtime.
 Installation uses `--require-hashes --no-deps`, so every Python artifact must
 match the reviewed lock. Compiler and development packages never cross the
 builder boundary. The runtime keeps only Debian's patched `libpq5` for psycopg3
