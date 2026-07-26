@@ -38,7 +38,14 @@ ENV VIRTUAL_ENV=/opt/venv \
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends build-essential libpq-dev; \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      cargo \
+      libpq-dev \
+      libxml2-dev \
+      libxslt1-dev \
+      pkg-config \
+      rustc; \
     python -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     python -m venv --without-pip "$VIRTUAL_ENV"; \
     apt-get clean; \
@@ -52,7 +59,7 @@ RUN set -eux; \
       --require-hashes \
       --no-deps \
       --no-cache; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; assert psycopg.pq.__impl__ == 'c'"; \
+    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"; \
     rm -f /tmp/requirements-production.lock
 
 ######## Minimal runtime #####################################################
@@ -92,7 +99,7 @@ WORKDIR /app/backend
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends libpq5; \
+    apt-get install -y --no-install-recommends libpq5 libxml2 libxslt1.1; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*; \
     test "$UID" -ne 0; \
@@ -128,7 +135,9 @@ RUN set -eux; \
     ! command -v ffmpeg; \
     ! command -v gcc; \
     ! command -v make; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; assert psycopg.pq.__impl__ == 'c'"
+    ! command -v cargo; \
+    ! command -v rustc; \
+    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
 
 EXPOSE 8080
 VOLUME ["/app/backend/data"]

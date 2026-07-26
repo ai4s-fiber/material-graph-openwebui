@@ -52,10 +52,12 @@ def test_release_image_pins_audited_base_images_and_separates_build_tools() -> N
     assert '--no-deps' in dockerfile
 
     runtime = dockerfile.split('AS runtime', maxsplit=1)[1]
-    assert 'apt-get install -y --no-install-recommends libpq5' in runtime
+    assert 'apt-get install -y --no-install-recommends libpq5 libxml2 libxslt1.1' in runtime
     assert 'build-essential' not in runtime
     assert 'libpq-dev' not in runtime
-    for executable in ('git', 'curl', 'jq', 'ffmpeg', 'gcc', 'make'):
+    assert 'libxml2-dev' not in runtime
+    assert 'libxslt1-dev' not in runtime
+    for executable in ('git', 'curl', 'jq', 'ffmpeg', 'gcc', 'make', 'cargo', 'rustc'):
         assert f'! command -v {executable}' in runtime
 
 

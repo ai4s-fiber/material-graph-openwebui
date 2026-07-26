@@ -42,8 +42,9 @@ hash-locked production virtual environment are copied into the final runtime.
 Installation uses `--require-hashes --no-deps`, so every Python artifact must
 match the reviewed lock. Compiler and development packages never cross the
 builder boundary. The runtime keeps only Debian's patched `libpq5` for psycopg3
-and contains no `git`, `curl`, `jq`, `ffmpeg`, `gcc`, `make`, `pip`, or test
-tooling.
+and the shared `libxml2`/`libxslt` libraries required by the document readers. It
+contains no `git`, `curl`, `jq`, `ffmpeg`, `gcc`, `make`, Rust toolchain, `pip`,
+or test tooling.
 
 The Material Graph deployment delegates local model inference, embeddings,
 reranking, browser automation, and document extraction to dedicated services. Its

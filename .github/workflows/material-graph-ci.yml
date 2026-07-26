@@ -101,11 +101,11 @@ jobs:
           docker run --rm --entrypoint sh "$image" -ec '
             test "$(id -u)" = 10001
             test "$(id -g)" = 10001
-            for command in git curl jq ffmpeg gcc make; do
+            for command in git curl jq ffmpeg gcc make cargo rustc; do
               ! command -v "$command"
             done
             ! python -m pip --version
-            python -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; assert psycopg.pq.__impl__ == 'c'"
+            python -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
           '
 
       - name: Smoke-test the production application
