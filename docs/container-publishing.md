@@ -10,7 +10,8 @@ Published references use only this form:
 ghcr.io/ai4s-fiber/material-graph-openwebui:sha-<40-character-commit>
 ```
 
-The workflow never creates or updates `latest`. Production deployments should
+The workflow makes the repository-linked GHCR package public after pushing the
+immutable tag. It never creates or updates `latest`. Production deployments should
 pin the registry digest returned by GHCR:
 
 ```text
