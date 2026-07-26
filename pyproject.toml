@@ -9,19 +9,18 @@ dependencies = [
     "fastapi==0.136.3",
     "uvicorn[standard]==0.41.0",
     "pydantic==2.13.4",
-    "python-multipart==0.0.27",
+    "python-multipart==0.0.31",
     "itsdangerous==2.2.0",
 
     "python-socketio==5.16.2",
-    "python-jose==3.5.0",
-    "cryptography==48.0.0",
+    "cryptography==49.0.0",
     "bcrypt==5.0.0",
     "argon2-cffi==25.1.0",
     "PyJWT[crypto]==2.13.0",
     "authlib==1.7.2",
 
     "requests==2.34.2",
-    "aiohttp==3.13.5", # do not update to 3.13.3 - broken
+    "aiohttp==3.14.1",
     "async-timeout==5.0.1",
     "aiocache==0.12.3",
     "aiofiles==25.1.0",
@@ -34,7 +33,8 @@ dependencies = [
 
     "sqlalchemy[asyncio]==2.0.50",
     "aiosqlite==0.22.1",
-    "psycopg[binary]==3.3.4",
+    "psycopg[binary]==3.3.4; python_version < '3.15'",
+    "psycopg==3.3.4; python_version >= '3.15'",
     "alembic==1.18.4",
 
     "pycrdt==0.13.1",
@@ -49,19 +49,18 @@ dependencies = [
     "asgiref==3.11.1",
 
     "tiktoken==0.13.0",
-    "mcp==1.27.2",
+    "mcp==1.28.1",
 
     "openai==2.29.0",
-    "anthropic==0.86.0",
+    "anthropic==0.87.0",
     "google-genai==1.66.0",
 
-    "langchain==1.2.10",
+    "langchain==1.3.9",
     "langchain-community==0.4.2",
     "langchain-classic==1.0.7",
     "langchain-text-splitters==1.1.2",
 
     "fake-useragent==2.2.0",
-    "chromadb==1.5.9",
     "opensearch-py==3.2.0",
     "PyMySQL==1.2.0",
     "boto3==1.42.62",
@@ -69,18 +68,18 @@ dependencies = [
     "transformers==5.5.4",
     "sentence-transformers==5.5.1",
     "accelerate==1.13.0",
-    "pyarrow==20.0.0", # fix: pin pyarrow version to 20 for rpi compatibility #15897
+    "pyarrow==25.0.0",
     "einops==0.8.2",
 
     "ftfy==6.3.1",
     "chardet==7.4.3",
-    "pypdf==6.7.5",
+    "pypdf==6.14.2",
     "fpdf2==2.8.7",
-    "pymdown-extensions==10.21.3",
+    "pymdown-extensions==11.0.1",
     "docx2txt==0.9",
     "python-pptx==1.0.2",
     "msoffcrypto-tool==6.0.0",
-    "nltk==3.9.4",
+    "nltk==3.10.0",
     "Markdown==3.10.2",
     "beautifulsoup4==4.14.3",
     "pypandoc==1.17",
@@ -94,7 +93,7 @@ dependencies = [
     "soundfile==0.13.1",
     "azure-ai-documentintelligence==1.0.2",
 
-    "pillow==12.2.0",
+    "pillow==12.3.0",
     "opencv-python-headless==4.13.0.92",
     "rapidocr-onnxruntime==1.4.4",
     "rank-bm25==0.2.2",
@@ -107,6 +106,7 @@ dependencies = [
     "pytube==15.0.0",
 
     "pydub==0.25.1",
+    "audioop-lts==0.2.2; python_version >= '3.13'",
     "ddgs==9.14.4",
 
     "google-api-python-client==2.197.0",
@@ -122,7 +122,7 @@ dependencies = [
     "ldap3==2.9.1",
 ]
 readme = "README.md"
-requires-python = ">= 3.11, < 3.13.0a1"
+requires-python = ">= 3.11, < 3.16.0a1"
 dynamic = ["version"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -130,13 +130,15 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Communications :: Chat",
     "Topic :: Multimedia",
 ]
 
 [project.optional-dependencies]
 postgres = [
-    "psycopg2-binary==2.9.12",
     "pgvector==0.4.2",
 ]
 mariadb = [
@@ -148,7 +150,6 @@ unstructured = [
 
 all = [
     "pymongo==4.17.0",
-    "psycopg2-binary==2.9.12",
     "pgvector==0.4.2",
     "moto[s3]>=5.0.26",
     "gcp-storage-emulator>=2024.8.3",

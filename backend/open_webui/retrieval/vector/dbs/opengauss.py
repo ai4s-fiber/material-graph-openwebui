@@ -2,7 +2,6 @@
 NOTE: This vector database integration is community-supported and maintained on a best-effort basis.
 """
 
-import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -11,22 +10,19 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column,
     Integer,
-    LargeBinary,
     MetaData,
     Table,
     Text,
     cast,
     column,
     create_engine,
-    func,
-    literal,
     select,
     text,
     values,
 )
 from sqlalchemy.dialects import registry
 from sqlalchemy.dialects.postgresql import JSONB, array
-from sqlalchemy.dialects.postgresql.psycopg2 import PGDialect_psycopg2
+from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
@@ -34,7 +30,7 @@ from sqlalchemy.pool import NullPool, QueuePool
 from sqlalchemy.sql import true
 
 
-class OpenGaussDialect(PGDialect_psycopg2):
+class OpenGaussDialect(PGDialect_psycopg):
     name = 'opengauss'
 
     def _get_server_version_info(self, connection):

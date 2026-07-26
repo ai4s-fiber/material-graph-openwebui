@@ -33,10 +33,35 @@ the non-root process. Existing or bind-mounted host paths must be prepared with 
 same numeric ownership before the container starts; the image never escalates to
 root to repair host permissions.
 
-Every published digest must pass a Grype gate that rejects `high` and `critical`
-findings. Passing images receive GitHub build provenance, an SPDX JSON SBOM
-attestation, and a Sigstore Cosign keyless signature bound to this workflow's GitHub
-OIDC identity. The SBOM is also retained as a workflow artifact for 30 days.
+## Minimal production runtime
+
+The container uses separate frontend and Python dependency builders. Node, Python,
+and the Python image's Debian Trixie root are all pinned by immutable SHA-256
+digests in the Dockerfile. Only the frontend build, application source, and the
+hash-locked production virtual environment are copied into the final runtime.
+Installation uses `--require-hashes --no-deps`, so every Python artifact must
+match the reviewed lock. Compiler and development packages never cross the
+builder boundary. The runtime keeps only Debian's patched `libpq5` for psycopg3
+and contains no `git`, `curl`, `jq`, `ffmpeg`, `gcc`, `make`, `pip`, or test
+tooling.
+
+The Material Graph deployment delegates local model inference, embeddings,
+reranking, browser automation, and document extraction to dedicated services. Its
+production dependency lock therefore omits Torch, ONNX, Whisper, Playwright, and
+alternate vector database clients. PostgreSQL/pgvector is the only in-process
+vector backend. Both SQLAlchemy execution paths explicitly use psycopg3; the
+production build compiles its C implementation against Debian `libpq` and does
+not ship psycopg2 or the self-contained `psycopg-binary` wheel. ChromaDB support
+and `python-jose` were removed rather than
+suppressed because their dependency chains contained unfixed Critical/High
+advisories. No wildcard vulnerability ignore or relaxed severity threshold is
+used.
+
+Every pull request and every published digest must pass the same Grype gate that
+rejects `high` and `critical` findings, including findings without an available
+upstream fix. Passing release images receive GitHub build provenance, an SPDX JSON
+SBOM attestation, and a Sigstore Cosign keyless signature bound to this workflow's
+GitHub OIDC identity. The SBOM is also retained as a workflow artifact for 30 days.
 Upstream Release and PyPI workflows remain disabled and are not prerequisites for
 container publishing. The workflow builds and publishes only; it does not deploy to
 any server.

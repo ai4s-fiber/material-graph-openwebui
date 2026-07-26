@@ -1,3 +1,10 @@
+# Material Graph production profile.
+#
+# The image delegates inference, embeddings, reranking, document extraction, and
+# vector persistence to dedicated services. Local Torch/ONNX/Whisper runtimes,
+# alternate vector databases, browser automation, and test tooling are excluded
+# from this lock to keep the externally reachable Open WebUI process small.
+
 fastapi==0.136.3
 uvicorn[standard]==0.41.0
 pydantic==2.13.4
@@ -25,42 +32,28 @@ python-mimeparse==2.0.0
 
 sqlalchemy[asyncio]==2.0.50
 aiosqlite==0.22.1
-psycopg[binary]==3.3.4; python_version < "3.15"
-psycopg==3.3.4; python_version >= "3.15"
+psycopg[c]==3.3.4
+pgvector==0.4.2
 alembic==1.18.4
 
 pycrdt==0.13.1
 redis==8.0.0
-
 APScheduler==3.11.2
 RestrictedPython==8.2
 pytz==2026.2
-
 loguru==0.7.3
 asgiref==3.11.1
 
-# AI libraries
 tiktoken==0.13.0
 mcp==1.28.1
-
 openai==2.29.0
 anthropic==0.87.0
 google-genai==1.66.0
-
 langchain==1.3.9
 langchain-community==0.4.2
 langchain-classic==1.0.7
 langchain-text-splitters==1.1.2
-
 fake-useragent==2.2.0
-weaviate-client==4.20.3
-opensearch-py==3.2.0
-
-transformers==5.5.4
-sentence-transformers==5.5.1
-accelerate==1.13.0
-pyarrow==25.0.0
-einops==0.8.2 
 
 ftfy==6.3.1
 chardet==7.4.3
@@ -70,33 +63,21 @@ pymdown-extensions==11.0.1
 docx2txt==0.9
 python-pptx==1.0.2
 msoffcrypto-tool==6.0.0
-unstructured==0.22.31
-
 nltk==3.10.0
 Markdown==3.10.2
 beautifulsoup4==4.14.3
 pypandoc==1.17
-pandas==3.0.3
+pandas==3.0.5
 openpyxl==3.1.5
 pyxlsb==1.0.10
 xlrd==2.0.2
 validators==0.35.0
 psutil==7.2.2
-sentencepiece==0.2.1
-soundfile==0.13.1
-
 pillow==12.3.0
-opencv-python-headless==4.13.0.92
-rapidocr-onnxruntime==1.4.4
 rank-bm25==0.2.2
 
-onnxruntime==1.26.0
-faster-whisper==1.2.1
-
-black==26.5.1
 youtube-transcript-api==1.2.4
 pytube==15.0.0
-
 pydub==0.25.1
 audioop-lts==0.2.2; python_version >= "3.13"
 ddgs==9.14.4
@@ -105,45 +86,14 @@ azure-ai-documentintelligence==1.0.2
 azure-identity==1.25.3
 azure-storage-blob==12.29.0
 azure-search-documents==12.0.0
-
-## Google Drive
 google-api-python-client==2.197.0
 google-auth-httplib2==0.4.0
 google-auth-oauthlib==1.4.0
-
 googleapis-common-protos==1.75.0
 google-cloud-storage==3.9.0
-
-## Databases
-pymongo==4.17.0
-pgvector==0.4.2
-
-PyMySQL==1.2.0
 boto3==1.42.62
-# mariadb==1.1.14 should be added if you want to support MariaDB
-# valkey-glide-sync==2.3.1 # optional: install manually if VECTOR_DB=valkey
-
-pymilvus==2.6.14
-qdrant-client==1.18.0
-playwright==1.60.0 # Caution: version must match docker-compose.playwright.yaml - Update the docker-compose.yaml if necessary
-elasticsearch==9.4.1
-pinecone==6.0.2
-oracledb==3.4.2
-
-av==14.0.1 # Caution: Set due to FATAL FIPS SELFTEST FAILURE, see discussion https://github.com/open-webui/open-webui/discussions/15720
-
-colbert-ai==0.2.22
-
-
-## Tests
-docker~=7.1.0
-pytest~=8.4.1
-pytest-docker~=3.2.5
-
-## LDAP
 ldap3==2.9.1
 
-## Trace
 opentelemetry-api==1.42.1
 opentelemetry-sdk==1.42.1
 opentelemetry-exporter-otlp==1.42.1
