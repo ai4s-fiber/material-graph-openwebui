@@ -10,8 +10,9 @@ Published references use only this form:
 ghcr.io/ai4s-fiber/material-graph-openwebui:sha-<40-character-commit>
 ```
 
-The workflow makes the repository-linked GHCR package public after pushing the
-immutable tag. It never creates or updates `latest`. Production deployments should
+GitHub organization package visibility must be configured as public once by a
+package administrator. The workflow verifies an anonymous pull and exact digest
+before succeeding. It never creates or updates `latest`. Production deployments should
 pin the registry digest returned by GHCR:
 
 ```text

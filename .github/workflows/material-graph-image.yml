@@ -70,15 +70,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Make the repository-linked GHCR package public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh api --method PATCH \
-            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${GITHUB_REPOSITORY#*/}" \
-            -f visibility=public
 
       - name: Generate SPDX SBOM from published image
         uses: anchore/sbom-action@v0
@@ -109,3 +100,20 @@ jobs:
           path: sbom.spdx.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Verify anonymous public pull and exact digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          token="$(curl --fail --silent --show-error \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull" \
+            | jq -r '.token')"
+          test -n "$token"
+          actual_digest="$(curl --fail --silent --show-error --head \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            "https://ghcr.io/v2/${repository}/manifests/${IMAGE_TAG}" \
+            | tr -d '\r' \
+            | awk -F ': ' 'tolower($1) == "docker-content-digest" {print $2}')"
+          test "$actual_digest" = "${{ steps.build.outputs.digest }}"
