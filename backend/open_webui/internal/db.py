@@ -152,9 +152,7 @@ class JSONField(types.TypeDecorator):  # TEXT-backed JSON storage
 
 # Normalize SSL params from the URL once and select psycopg3 explicitly.
 _url_without_ssl, _ssl_dict = extract_ssl_params_from_url(DATABASE_URL)
-_normalized_database_url = (
-    reattach_ssl_params_to_url(_url_without_ssl, _ssl_dict) if _ssl_dict else DATABASE_URL
-)
+_normalized_database_url = reattach_ssl_params_to_url(_url_without_ssl, _ssl_dict) if _ssl_dict else DATABASE_URL
 SQLALCHEMY_DATABASE_URL = make_sync_database_url(_normalized_database_url)
 
 

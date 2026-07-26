@@ -39,8 +39,8 @@ ENV VIRTUAL_ENV=/opt/venv \
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends build-essential libpq-dev; \
-    python -m venv --without-pip "$VIRTUAL_ENV"; \
     python -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
+    python -m venv --without-pip "$VIRTUAL_ENV"; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
