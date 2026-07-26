@@ -40,3 +40,14 @@ OIDC identity. The SBOM is also retained as a workflow artifact for 30 days.
 Upstream Release and PyPI workflows remain disabled and are not prerequisites for
 container publishing. The workflow builds and publishes only; it does not deploy to
 any server.
+
+## Formatting ownership
+
+This product fork owns formatting for the Material Graph integration surface: its
+graph components, assistant form bridge, preview and Cypress contract, release
+workflows, and product release documentation. Frontend CI runs a read-only Prettier
+check over those paths and still builds the complete Open WebUI production frontend.
+
+The remaining Open WebUI source tree is upstream-owned and is not mechanically
+rewritten by this project's CI. Upstream formatting drift must not make an otherwise
+unchanged Material Graph release mutate unrelated application files.

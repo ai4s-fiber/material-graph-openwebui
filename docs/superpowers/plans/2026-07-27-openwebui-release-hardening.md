@@ -13,6 +13,7 @@
 ### Task 1: Freeze the release contract in tests
 
 **Files:**
+
 - Create: `test/integrations/test_material_graph_release_contract.py`
 - Modify: `.github/workflows/material-graph-ci.yml`
 
@@ -33,6 +34,7 @@ Run the new release contract beside `test/integrations/test_material_graph_pipe.
 ### Task 2: Make the image non-root and reproducible
 
 **Files:**
+
 - Modify: `Dockerfile`
 
 - [ ] **Step 1: Set immutable release defaults**
@@ -56,6 +58,7 @@ Expected: Dockerfile assertions pass while workflow assertions remain red.
 ### Task 3: Harden the immutable image workflow
 
 **Files:**
+
 - Modify: `.github/workflows/material-graph-image.yml`
 - Modify: `.github/workflows/material-graph-ci.yml`
 - Modify: `docs/container-publishing.md`
@@ -87,6 +90,7 @@ Document UID/GID 10001, fresh-volume ownership, pinned `uv`, high/critical vulne
 ### Task 4: Validate and commit
 
 **Files:**
+
 - Test: `test/integrations/test_material_graph_release_contract.py`
 - Test: `src/lib/components/chat/MaterialGraph/tests/*.test.ts`
 

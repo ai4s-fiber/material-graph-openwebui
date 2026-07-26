@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE_WORKFLOW = ROOT / ".github" / "workflows" / "material-graph-image.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "material-graph-ci.yml"
+FRONTEND_WORKFLOW = ROOT / ".github" / "workflows" / "frontend.yaml"
 
 
 def _text(path: Path) -> str:
@@ -38,6 +39,20 @@ def test_release_image_is_non_root_with_a_writable_data_volume() -> None:
 def test_material_graph_workflows_pin_every_action_to_a_commit() -> None:
     _assert_actions_are_commit_pinned(CI_WORKFLOW)
     _assert_actions_are_commit_pinned(IMAGE_WORKFLOW)
+
+
+def test_frontend_format_gate_is_read_only_and_project_scoped() -> None:
+    workflow = _text(FRONTEND_WORKFLOW)
+    formatting = workflow.split("- name: Verify Material Graph formatting", maxsplit=1)[1]
+    formatting = formatting.split("- name: Production build", maxsplit=1)[0]
+
+    assert "npx prettier --check" in formatting
+    assert '"src/lib/components/chat/MaterialGraph/**/*.{ts,svelte}"' in formatting
+    assert '".github/workflows/material-graph-image.yml"' in formatting
+    assert "npm run format" not in workflow
+    assert "npm run i18n:parse" not in workflow
+    assert "git diff --exit-code" not in workflow
+    assert "npm run build" in workflow
 
 
 def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() -> None:
