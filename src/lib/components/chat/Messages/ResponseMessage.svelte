@@ -62,6 +62,8 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import RegenerateMenu from './ResponseMessage/RegenerateMenu.svelte';
 	import StatusHistory from './ResponseMessage/StatusHistory.svelte';
+	import AssistantForm from './ResponseMessage/AssistantForm.svelte';
+	import { latestAssistantForm } from '../MaterialGraph/types';
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
@@ -177,6 +179,11 @@
 	$: model = $models.find((m) => m.id === message.model);
 
 	$: statusEntries = message?.statusHistory ?? [...(message?.status ? [message?.status] : [])];
+	$: assistantForm = latestAssistantForm(message?.statusHistory ?? []);
+	const handleMaterialGraphResume = (resumeEvent: any) => {
+		if (resumeEvent?.token) message.content = `${message.content ?? ''}${resumeEvent.token}`;
+		if (resumeEvent?.status) message.statusHistory = [...(message.statusHistory ?? []), resumeEvent.status];
+	};
 	$: hasVisibleStatus =
 		(model?.info?.meta?.capabilities?.status_updates ?? true) &&
 		statusEntries.length > 0 &&
@@ -693,6 +700,7 @@
 					<div>
 						{#if model?.info?.meta?.capabilities?.status_updates ?? true}
 							<StatusHistory statusHistory={message?.statusHistory} />
+							{#if assistantForm}<AssistantForm form={assistantForm} onResumeEvent={handleMaterialGraphResume} />{/if}
 						{/if}
 
 						{#if message?.files && message.files?.filter( (f) => ['image', 'file'].includes(f.type) ).length > 0}

@@ -1174,9 +1174,9 @@
 					}
 				}
 			}
-		} else {
-			// Redirect to /error when Backend Not Detected
-			await goto(`/error`);
+		} else if ($page.url.pathname !== '/material-graph-preview') {
+			// Redirect to /error when Backend Not Detected. The local preview route is static by design.
+			await goto('/error');
 		}
 
 		await tick();

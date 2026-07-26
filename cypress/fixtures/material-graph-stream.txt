@@ -1,0 +1,7 @@
+data: {"version":"2.0","event":{"type":"WorkflowDefinition","data":{"runId":"e2e-run","workflow":{"nodes":[{"id":"intake","label":"需求解析"},{"id":"arbitrary","label":"任意工作流节点"},{"id":"gate","label":"专家审核"}],"edges":[{"source":"intake","target":"arbitrary"},{"source":"arbitrary","target":"gate"}]}}}}
+
+data: {"event":{"type":"NodeState","data":{"run_id":"e2e-run","node_id":"arbitrary","status":"running","authoritative":true,"elapsed_ms":120}}}
+
+data: {"event":{"type":"assistant_form","data":{"form_id":"equipment","run_id":"e2e-run","checkpoint_id":"cp-e2e","title":"补充设备边界","endpoint":"http://localhost:8000","schema":{"type":"object","required":["temperature","modes"],"properties":{"temperature":{"type":"number","title":"最高温度","description":"允许范围 100–500 °C","minimum":100,"maximum":500},"decision":{"type":"string","title":"审核决定","enum":["approve","reject"]},"modes":{"type":"array","title":"测试模式","items":{"type":"string","enum":["dma","tga","dsc"]},"minItems":2},"hazardous":{"type":"boolean","title":"包含危险步骤"}}},"submit":{"path":"/runs/e2e-run/resume"}}}}
+
+data: {"event":{"type":"token","data":{"run_id":"e2e-run","text":"等待设备边界。"}}}

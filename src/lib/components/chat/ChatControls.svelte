@@ -1,5 +1,5 @@
 <script context="module" lang="ts">
-	let savedTab: 'controls' | 'files' | 'overview' = 'controls';
+	let savedTab: 'controls' | 'files' | 'overview' | 'materialGraph' = 'controls';
 </script>
 
 <script lang="ts">
@@ -34,6 +34,8 @@
 	import FileNav from './FileNav.svelte';
 	import PyodideFileNav from './PyodideFileNav.svelte';
 	import Overview from './Overview.svelte';
+	import MaterialGraphView from './MaterialGraph/View.svelte';
+	import { latestMaterialGraph } from './MaterialGraph/types';
 
 	const i18n = getContext('i18n');
 
@@ -63,6 +65,14 @@
 
 	// Tab state for Controls+Files panel
 	let activeTab = savedTab;
+	let lastAutoOpenedRun = '';
+	$: materialGraph = latestMaterialGraph(history);
+	$: showMaterialGraphTab = materialGraph !== null;
+	$: if (materialGraph?.run_id && materialGraph.run_id !== lastAutoOpenedRun) {
+		lastAutoOpenedRun = materialGraph.run_id;
+		activeTab = 'materialGraph';
+		showControls.set(true);
+	}
 	// svelte-ignore reactive_declaration_module_script_dependency
 	$: {
 		savedTab = activeTab;
@@ -81,6 +91,7 @@
 
 	// Tab fallback: if active tab becomes hidden, switch to next available
 	$: if (!showOverviewTab && activeTab === 'overview') activeTab = 'controls';
+	$: if (!showMaterialGraphTab && activeTab === 'materialGraph') activeTab = 'controls';
 	$: if (!showFilesTab && activeTab === 'files') activeTab = 'controls';
 	$: if (!showControlsTab && activeTab === 'controls') {
 		if (showFilesTab) activeTab = 'files';
@@ -327,7 +338,9 @@
 										{$i18n.t('Files')}
 									</button>
 								{/if}
-								{#if showOverviewTab}
+								{#if showMaterialGraphTab}
+									<button class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab === 'materialGraph' ? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}" on:click={() => (activeTab = 'materialGraph')}>Graph</button>
+								{/if}								{#if showOverviewTab}
 									<button
 										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
 										'overview'
@@ -364,7 +377,9 @@
 									? 'overflow-y-auto px-3 pt-1'
 									: ''}"
 						>
-							{#if activeTab === 'overview'}
+							{#if activeTab === 'materialGraph' && materialGraph}
+								<MaterialGraphView snapshot={materialGraph} />
+							{:else if activeTab === 'overview'}
 								<Overview
 									{history}
 									onNodeClick={(e) => {
@@ -473,7 +488,9 @@
 											{$i18n.t('Files')}
 										</button>
 									{/if}
-									{#if showOverviewTab}
+									{#if showMaterialGraphTab}
+									<button class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab === 'materialGraph' ? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}" on:click={() => (activeTab = 'materialGraph')}>Graph</button>
+								{/if}								{#if showOverviewTab}
 										<button
 											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
 											'overview'
@@ -510,7 +527,9 @@
 										? 'overflow-y-auto px-3 pt-1'
 										: ''}"
 							>
-								{#if activeTab === 'overview'}
+								{#if activeTab === 'materialGraph' && materialGraph}
+									<MaterialGraphView snapshot={materialGraph} />
+								{:else if activeTab === 'overview'}
 									<Overview
 										{history}
 										onNodeClick={(e) => {

@@ -52,6 +52,7 @@
 	},
 	"type": "module",
 	"dependencies": {
+		"@dagrejs/dagre": "^1.1.5",
 		"@azure/msal-browser": "^4.5.0",
 		"@codemirror/lang-javascript": "^6.2.2",
 		"@codemirror/lang-python": "^6.1.6",
