@@ -5,8 +5,10 @@
 # alternate vector databases, browser automation, and test tooling are excluded
 # from this lock to keep the externally reachable Open WebUI process small.
 
-# Imported at startup by open_webui.routers.utils for the /code/format endpoint.
+# Imported directly by modules on the open_webui.main startup path.
 black==26.5.1
+huggingface-hub==1.20.1
+typer==0.25.1
 fastapi==0.136.3
 uvicorn[standard]==0.41.0
 pydantic==2.13.4

@@ -74,11 +74,14 @@ def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
         assert forbidden not in production_lock
         assert forbidden not in pyproject
 
-    assert 'black==26.5.1' in production_requirements
-    assert 'black==26.5.1' in production_lock
+    for required in ('black==26.5.1', 'huggingface-hub==1.20.1', 'typer==0.25.1'):
+        assert required in production_requirements
+        assert required in production_lock
     assert 'psycopg-c==3.3.4' in production_lock
     assert "psycopg.pq.__impl__ == 'c'" in dockerfile
-    native_import_smoke = 'import aiohttp, black, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy'
+    native_import_smoke = (
+        'import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer'
+    )
     assert dockerfile.count(native_import_smoke) == 2
     assert native_import_smoke in _text(CI_WORKFLOW)
     assert 'python -m uvicorn --version' in _text(CI_WORKFLOW)
