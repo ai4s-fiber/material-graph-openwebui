@@ -139,6 +139,16 @@ jobs:
             --env "POSTGRES_PASSWORD=$db_password" \
             "$db_image"
           for attempt in $(seq 1 30); do
+            if grep -Fq 'PostgreSQL init process complete; ready for start up.' <<<"$(docker logs "$db_container" 2>&1)"; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$db_container" | grep -qx true; then
+              exit 1
+            fi
+            sleep 2
+          done
+          grep -Fq 'PostgreSQL init process complete; ready for start up.' <<<"$(docker logs "$db_container" 2>&1)"
+          for attempt in $(seq 1 30); do
             if docker exec "$db_container" pg_isready --username postgres --dbname openwebui >/dev/null 2>&1; then
               break
             fi

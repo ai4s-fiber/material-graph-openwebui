@@ -136,6 +136,7 @@ def test_pull_requests_use_the_same_high_severity_container_gate() -> None:
     assert 'docker network create "$network"' in workflow
     assert '--env "DATABASE_URL=$database_url"' in workflow
     assert '--env "PGVECTOR_DB_URL=$database_url"' in workflow
+    assert 'PostgreSQL init process complete; ready for start up.' in workflow
 
 
 def test_public_pull_and_signature_are_verified_in_an_independent_job() -> None:
