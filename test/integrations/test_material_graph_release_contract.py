@@ -245,10 +245,13 @@ def test_public_pull_and_signature_are_verified_in_an_independent_job() -> None:
     assert 'Verify anonymous public pull' not in publish
     assert 'needs: publish' in verify
     assert re.search(r'permissions:\s*\n\s+contents: read', verify)
+    assert re.search(r'permissions:\s*\n\s+contents: read\s+\n\s+packages: read', verify)
     assert 'packages: write' not in verify
     assert 'id-token: write' not in verify
-    assert 'docker/login-action@' not in verify
-    assert 'DOCKER_CONFIG' in verify
+    assert 'docker/login-action@' in verify
+    assert 'DOCKER_CONFIG' not in verify
+    assert 'Verify authenticated private pull' in verify
+    assert 'GHCR_TOKEN' in verify
     assert 'ghcr.io/token?service=ghcr.io' in verify
     assert 'docker-content-digest' in verify
     assert 'cosign verify' in verify
