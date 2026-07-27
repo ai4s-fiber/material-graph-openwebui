@@ -5,7 +5,7 @@
 # layers of the base-image chain remain auditable.
 ARG NODE_BASE=node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8
 ARG PYTHON_BASE=python:3.15.0b4-slim-trixie@sha256:876977512a3f291014c1ffcc48cd6a05dcee034df0ebb9cd84f066355f575d44
-ARG RUST_BASE=rust:1.88-slim-trixie@sha256:9a7159329166b45f453351a077367f501aa3e98378f7e327530e7966a139d05f
+ARG RUST_BASE=rust:1.95.0-slim-trixie@sha256:e14e87345b4d5964ddcc3491d27ee046a0f23820f340c3c1e24da6880141f7c0
 ARG DEBIAN_BASE=debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
 
 ARG BUILD_HASH=dev-build
@@ -46,7 +46,7 @@ COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
 COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 
 RUN set -eux; \
-    rustc --version | grep -E '^rustc 1\.88\.'; \
+    rustc --version | grep -E '^rustc 1\.95\.'; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       build-essential \
