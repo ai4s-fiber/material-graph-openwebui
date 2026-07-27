@@ -6,7 +6,7 @@ import os
 import sys
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from open_webui.env import (
@@ -25,14 +25,12 @@ from open_webui.env import (
     DATABASE_SQLITE_PRAGMA_SYNCHRONOUS,
     DATABASE_SQLITE_PRAGMA_TEMP_STORE,
     DATABASE_URL,
-    ENABLE_DB_MIGRATIONS,
-    OPEN_WEBUI_DIR,
 )
 from sqlalchemy import Dialect, MetaData, create_engine, event, types
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, scoped_session, sessionmaker
+from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool, QueuePool
 from sqlalchemy.sql.type_api import _T
 from typing_extensions import Self
@@ -40,16 +38,11 @@ from typing_extensions import Self
 log = logging.getLogger(__name__)
 
 
-# ── SSL URL normalization (used by sync engine & Alembic migrations) ─
+# ── PostgreSQL URL normalization (used by both engines and Alembic) ─
 #
-# psycopg2 (sync) needs ``sslmode=`` in the connection string (it does
-# not recognise the bare ``ssl=`` key that some ORMs emit).  The helpers
-# below strip all SSL-related query params, normalise them, and
-# reattach them in the canonical libpq form.
-#
-# The **async** engine now uses psycopg (v3), which speaks libpq
-# natively, so it needs no translation at all — the DATABASE_URL is
-# passed through as-is.
+# psycopg (v3) uses libpq-style ``sslmode=`` parameters. The helpers below
+# normalize legacy URLs and force SQLAlchemy to select psycopg3 for both the
+# synchronous startup path and the asynchronous runtime path.
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -101,7 +94,7 @@ def extract_ssl_params_from_url(url: str) -> tuple[str, dict[str, str]]:
 def reattach_ssl_params_to_url(url_without_ssl: str, ssl_dict: dict[str, str]) -> str:
     """Re-append SSL query-string parameters to a cleaned PostgreSQL URL.
 
-    Used for psycopg2/libpq consumers that expect ``sslmode`` and the
+    Used for psycopg/libpq consumers that expect ``sslmode`` and the
     certificate-file keys in the connection string.
     """
     if not ssl_dict:
@@ -113,6 +106,22 @@ def reattach_ssl_params_to_url(url_without_ssl: str, ssl_dict: dict[str, str]) -
 
     sep = '&' if '?' in url_without_ssl else '?'
     return f'{url_without_ssl}{sep}{"&".join(parts)}'
+
+
+def make_sync_database_url(url: str) -> str:
+    """Return a SQLAlchemy URL that explicitly selects psycopg3.
+
+    SQLAlchemy still maps a bare ``postgresql://`` URL to psycopg2. The
+    production image intentionally ships only psycopg3, so all legacy
+    PostgreSQL spellings are normalized before an engine is created.
+    """
+    if url.startswith('postgresql+psycopg2://'):
+        return url.replace('postgresql+psycopg2://', 'postgresql+psycopg://', 1)
+    if url.startswith('postgresql://'):
+        return url.replace('postgresql://', 'postgresql+psycopg://', 1)
+    if url.startswith('postgres://'):
+        return url.replace('postgres://', 'postgresql+psycopg://', 1)
+    return url
 
 
 # Backwards-compatible aliases for external callers.
@@ -141,12 +150,10 @@ class JSONField(types.TypeDecorator):  # TEXT-backed JSON storage
         return JSONField(length=self.impl.length)
 
 
-# Normalize SSL params from the URL once; the sync engine needs them
-# reattached in canonical libpq form for psycopg2.
+# Normalize SSL params from the URL once and select psycopg3 explicitly.
 _url_without_ssl, _ssl_dict = extract_ssl_params_from_url(DATABASE_URL)
-
-# For psycopg2 (sync engine), re-append sslmode + cert-file params.
-SQLALCHEMY_DATABASE_URL = reattach_ssl_params_to_url(_url_without_ssl, _ssl_dict) if _ssl_dict else DATABASE_URL
+_normalized_database_url = reattach_ssl_params_to_url(_url_without_ssl, _ssl_dict) if _ssl_dict else DATABASE_URL
+SQLALCHEMY_DATABASE_URL = make_sync_database_url(_normalized_database_url)
 
 
 class RDSIAMTokenAuth:
@@ -221,13 +228,9 @@ def _make_async_url(url: str) -> str:
         )
     if url.startswith('sqlite:///') or url.startswith('sqlite://'):
         return url.replace('sqlite://', 'sqlite+aiosqlite://', 1)
-    # psycopg v3 — auto-selects async mode with create_async_engine
-    if url.startswith('postgresql+psycopg2://'):
-        return url.replace('postgresql+psycopg2://', 'postgresql+psycopg://', 1)
-    if url.startswith('postgresql://'):
-        return url.replace('postgresql://', 'postgresql+psycopg://', 1)
-    if url.startswith('postgres://'):
-        return url.replace('postgres://', 'postgresql+psycopg://', 1)
+    # psycopg v3 auto-selects async mode with create_async_engine.
+    if _is_postgres_url(url):
+        return make_sync_database_url(url)
     # For other dialects, return as-is and let SQLAlchemy handle it
     return url
 

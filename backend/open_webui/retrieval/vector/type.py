@@ -5,7 +5,6 @@ class VectorType(StrEnum):
     MILVUS = 'milvus'
     MARIADB_VECTOR = 'mariadb-vector'
     QDRANT = 'qdrant'
-    CHROMA = 'chroma'
     PINECONE = 'pinecone'
     ELASTICSEARCH = 'elasticsearch'
     OPENSEARCH = 'opensearch'

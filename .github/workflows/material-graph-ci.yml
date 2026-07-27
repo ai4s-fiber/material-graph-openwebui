@@ -56,3 +56,145 @@ jobs:
 
       - name: Build production frontend
         run: npm run build
+
+  container-security:
+    name: Production image and Grype gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build production image locally
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          platforms: linux/amd64
+          tags: material-graph-openwebui:ci-${{ github.sha }}
+          build-args: |
+            BUILD_HASH=${{ github.sha }}
+            UID=10001
+            GID=10001
+            UV_VERSION=0.11.32
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=openwebui-secure-image
+          cache-to: type=gha,mode=max,scope=openwebui-secure-image
+
+      - name: Verify the minimal non-root runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="material-graph-openwebui:ci-${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "10001:10001"
+          test "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$image")" = "null"
+          test "$(docker image inspect --format '{{json .Config.Cmd}}' "$image")" = '["bash","start.sh"]'
+          docker run --rm --entrypoint sh "$image" -ec '
+            test "$(id -u)" = 10001
+            test "$(id -g)" = 10001
+            for command in git curl jq ffmpeg gcc make cargo rustc apk; do
+              ! command -v "$command"
+            done
+            ! python -m pip --version
+            python -c "import sys; import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert sys.version_info[:3] == (3, 14, 6); assert sys.prefix == \"/opt/venv\"; assert psycopg.pq.__impl__ == \"c\""
+            python -m uvicorn --version
+          '
+
+      - name: Smoke-test the production application
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="material-graph-openwebui:ci-${GITHUB_SHA}"
+          container="material-graph-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          db_image="pgvector/pgvector:0.8.1-pg17-trixie@sha256:137f044b0efe3d57f39b972b9b53641b1f2045b99d879e298bbf514a25787dcf"
+          network="material-graph-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          db_container="material-graph-db-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          db_password="materialgraph${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
+          database_url="postgresql://postgres:${db_password}@${db_container}:5432/openwebui"
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              docker inspect --format 'app-state={{json .State}}' "$container" 2>/dev/null || true
+              docker logs "$container" 2>/dev/null || true
+              docker logs "$db_container" 2>/dev/null || true
+            fi
+            docker rm --force "$container" >/dev/null 2>&1 || true
+            docker rm --force "$db_container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+          docker network create "$network"
+          docker run --detach --name "$db_container" \
+            --network "$network" \
+            --env POSTGRES_DB=openwebui \
+            --env POSTGRES_USER=postgres \
+            --env "POSTGRES_PASSWORD=$db_password" \
+            "$db_image"
+          for attempt in $(seq 1 30); do
+            if grep -Fq 'PostgreSQL init process complete; ready for start up.' <<<"$(docker logs "$db_container" 2>&1)"; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$db_container" | grep -qx true; then
+              exit 1
+            fi
+            sleep 2
+          done
+          grep -Fq 'PostgreSQL init process complete; ready for start up.' <<<"$(docker logs "$db_container" 2>&1)"
+          for attempt in $(seq 1 30); do
+            if docker exec "$db_container" pg_isready --username postgres --dbname openwebui >/dev/null 2>&1; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$db_container" | grep -qx true; then
+              exit 1
+            fi
+            sleep 2
+          done
+          docker exec "$db_container" pg_isready --username postgres --dbname openwebui >/dev/null
+          docker run --rm \
+            --network "$network" \
+            --env "DATABASE_URL=$database_url" \
+            --env "PGVECTOR_DB_URL=$database_url" \
+            --env WEBUI_SECRET_KEY=material-graph-ci-import-check \
+            --entrypoint python \
+            "$image" \
+            -c "import open_webui.main; print('open-webui-import-ok')"
+          docker run --detach --name "$container" \
+            --network "$network" \
+            --publish 127.0.0.1:18080:8080 \
+            --env "DATABASE_URL=$database_url" \
+            --env "PGVECTOR_DB_URL=$database_url" \
+            --env PYTHONFAULTHANDLER=1 \
+            "$image"
+          for attempt in $(seq 1 60); do
+            response=""
+            if response="$(curl --fail --silent http://127.0.0.1:18080/health 2>/dev/null)" \
+              && python -c "import json, sys; assert json.load(sys.stdin).get('status') is True" <<<"$response"; then
+              exit 0
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$container" | grep -qx true; then
+              exit 1
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Block high and critical vulnerabilities with Grype
+        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        with:
+          image: material-graph-openwebui:ci-${{ github.sha }}
+          severity-cutoff: high
+          fail-build: true
+          only-fixed: false
+          output-format: table

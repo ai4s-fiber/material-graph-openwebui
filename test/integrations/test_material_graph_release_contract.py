@@ -3,37 +3,134 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE_WORKFLOW = ROOT / ".github" / "workflows" / "material-graph-image.yml"
-CI_WORKFLOW = ROOT / ".github" / "workflows" / "material-graph-ci.yml"
-FRONTEND_WORKFLOW = ROOT / ".github" / "workflows" / "frontend.yaml"
+IMAGE_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-image.yml'
+CI_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-ci.yml'
+FRONTEND_WORKFLOW = ROOT / '.github' / 'workflows' / 'frontend.yaml'
 
 
 def _text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    return path.read_text(encoding='utf-8')
 
 
 def _assert_actions_are_commit_pinned(path: Path) -> None:
-    uses = re.findall(r"^\s*-?\s*uses:\s+[^@\s]+@([^\s#]+)", _text(path), re.MULTILINE)
-    assert uses, f"no actions found in {path.name}"
-    assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for revision in uses)
+    uses = re.findall(r'^\s*-?\s*uses:\s+[^@\s]+@([^\s#]+)', _text(path), re.MULTILINE)
+    assert uses, f'no actions found in {path.name}'
+    assert all(re.fullmatch(r'[0-9a-f]{40}', revision) for revision in uses)
 
 
 def test_release_image_is_non_root_with_a_writable_data_volume() -> None:
-    dockerfile = _text(ROOT / "Dockerfile")
+    dockerfile = _text(ROOT / 'Dockerfile')
 
-    assert re.search(r"^ARG UID=10001$", dockerfile, re.MULTILINE)
-    assert re.search(r"^ARG GID=10001$", dockerfile, re.MULTILINE)
-    assert re.search(r"^ARG UV_VERSION=0\.11\.32$", dockerfile, re.MULTILINE)
-    assert 'pip3 install --no-cache-dir "uv==${UV_VERSION}"' in dockerfile
+    assert re.search(r'^ARG UID=10001$', dockerfile, re.MULTILINE)
+    assert re.search(r'^ARG GID=10001$', dockerfile, re.MULTILINE)
+    assert re.search(r'^ARG UV_VERSION=0\.11\.32$', dockerfile, re.MULTILINE)
+    assert 'uv --version | grep -F "uv ${UV_VERSION}"' in dockerfile
+    assert 'python -m pip install' not in dockerfile
     assert 'test "$UID" -ne 0' in dockerfile
     assert 'test "$GID" -ne 0' in dockerfile
-    assert (
-        'install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data' in dockerfile
-    )
+    assert 'install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data' in dockerfile
+    assert 'WEBUI_SECRET_KEY_FILE=/app/backend/data/.webui_secret_key' in dockerfile
     assert 'VOLUME ["/app/backend/data"]' in dockerfile
-    assert "USER $UID:$GID" in dockerfile
+    assert 'USER $UID:$GID' in dockerfile
+
+
+def test_release_image_pins_audited_base_images_and_separates_build_tools() -> None:
+    dockerfile = _text(ROOT / 'Dockerfile')
+
+    for name in ('NODE_BASE', 'PYTHON_BUILD_BASE', 'WOLFI_BASE'):
+        assert re.search(
+            rf'^ARG {name}=[^\s]+@sha256:[0-9a-f]{{64}}$',
+            dockerfile,
+            re.MULTILINE,
+        )
+
+    assert 'AS frontend-build' in dockerfile
+    assert 'AS python-deps' in dockerfile
+    assert 'AS runtime-assembly' in dockerfile
+    assert 'FROM scratch AS runtime' in dockerfile
+    assert 'AS rust-toolchain' not in dockerfile
+    assert 'backend/requirements-production.lock' in dockerfile
+    assert '--require-hashes' in dockerfile
+    assert '--no-deps' in dockerfile
+
+    builder = dockerfile.split('AS python-deps', maxsplit=1)[1]
+    builder = builder.split('AS runtime-assembly', maxsplit=1)[0]
+    for package in (
+        'libpq-18=18.4-r7',
+        'libxml2-dev=2.15.3-r3',
+        'libxslt=1.1.45-r3',
+        'libxslt-dev=1.1.45-r3',
+        'postgresql-18-dev=18.4-r7',
+        'zlib-dev=1.3.2-r3',
+    ):
+        assert package in builder
+    assert "python --version | grep -F 'Python 3.14.6'" in builder
+    assert "assert sys.prefix == '/opt/venv'" in builder
+
+    assembly = dockerfile.split('AS runtime-assembly', maxsplit=1)[1]
+    assembly = assembly.split('FROM scratch AS runtime', maxsplit=1)[0]
+    for package in (
+        'bash=5.3-r12',
+        'libpq-18=18.4-r7',
+        'libxml2-16=2.15.3-r3',
+        'libxslt=1.1.45-r3',
+        'python-3.14=3.14.6-r4',
+    ):
+        assert package in assembly
+    assert 'apk del wolfi-base wolfi-keys apk-tools' in assembly
+    assert 'ENV VIRTUAL_ENV=/opt/venv' in assembly
+    assert "assert sys.prefix == '/opt/venv'" in assembly
+    assert 'build-base' not in assembly
+    assert 'postgresql-18-dev' not in assembly
+    assert 'libxml2-dev' not in assembly
+    assert 'libxslt-dev' not in assembly
+    assert 'zlib-dev' not in assembly
+    for executable in ('git', 'curl', 'jq', 'ffmpeg', 'gcc', 'make', 'cargo', 'rustc', 'apk'):
+        assert f'! command -v {executable}' in assembly
+
+    runtime = dockerfile.split('FROM scratch AS runtime', maxsplit=1)[1]
+    assert 'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt' in runtime
+    assert 'COPY --from=runtime-assembly / /' in runtime
+    assert 'ENTRYPOINT' not in runtime
+
+
+def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
+    production_requirements = _text(ROOT / 'backend' / 'requirements-production.txt').lower()
+    production_lock = _text(ROOT / 'backend' / 'requirements-production.lock').lower()
+    pyproject = _text(ROOT / 'pyproject.toml').lower()
+    dockerfile = _text(ROOT / 'Dockerfile').lower()
+
+    for forbidden in ('chromadb', 'python-jose', 'ecdsa', 'psycopg2'):
+        assert forbidden not in production_requirements
+        assert forbidden not in production_lock
+        assert forbidden not in pyproject
+
+    for required in ('black==26.5.1', 'huggingface-hub==1.20.1', 'typer==0.25.1'):
+        assert required in production_requirements
+        assert required in production_lock
+    assert 'psycopg-c==3.3.4' in production_lock
+    assert "psycopg.pq.__impl__ == 'c'" in dockerfile
+    native_import_smoke = (
+        'import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer'
+    )
+    assert dockerfile.count(native_import_smoke) == 2
+    assert native_import_smoke in _text(CI_WORKFLOW)
+    assert 'python -m uvicorn --version' in _text(CI_WORKFLOW)
+    assert r'assert psycopg.pq.__impl__ == \"c\"' in _text(CI_WORKFLOW)
+    assert 'zlib-dev=1.3.2-r3' in dockerfile
+    assert 'vector_db=pgvector' in dockerfile
+    assert 'severity-cutoff' not in dockerfile
+
+
+def test_pgvector_uses_psycopg3_when_the_runtime_uses_postgres() -> None:
+    pgvector = _text(ROOT / 'backend' / 'open_webui' / 'retrieval' / 'vector' / 'dbs' / 'pgvector.py')
+
+    assert 'def _make_sync_pgvector_url(url: str) -> str:' in pgvector
+    assert "postgresql+psycopg2://', 'postgresql+psycopg://" in pgvector
+    assert "postgresql://', 'postgresql+psycopg://" in pgvector
+    assert 'if PGVECTOR_DB_URL:' in pgvector
+    assert 'PGVECTOR_DB_URL = _make_sync_pgvector_url(PGVECTOR_DB_URL)' in pgvector
 
 
 def test_material_graph_workflows_pin_every_action_to_a_commit() -> None:
@@ -43,46 +140,76 @@ def test_material_graph_workflows_pin_every_action_to_a_commit() -> None:
 
 def test_frontend_format_gate_is_read_only_and_project_scoped() -> None:
     workflow = _text(FRONTEND_WORKFLOW)
-    formatting = workflow.split("- name: Verify Material Graph formatting", maxsplit=1)[1]
-    formatting = formatting.split("- name: Production build", maxsplit=1)[0]
+    formatting = workflow.split('- name: Verify Material Graph formatting', maxsplit=1)[1]
+    formatting = formatting.split('- name: Production build', maxsplit=1)[0]
 
-    assert "npx prettier --check" in formatting
+    assert 'npx prettier --check' in formatting
     assert '"src/lib/components/chat/MaterialGraph/**/*.{ts,svelte}"' in formatting
     assert '".github/workflows/material-graph-image.yml"' in formatting
-    assert "npm run format" not in workflow
-    assert "npm run i18n:parse" not in workflow
-    assert "git diff --exit-code" not in workflow
-    assert "npm run build" in workflow
+    assert 'npm run format' not in workflow
+    assert 'npm run i18n:parse' not in workflow
+    assert 'git diff --exit-code' not in workflow
+    assert 'npm run build' in workflow
 
 
 def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() -> None:
     workflow = _text(IMAGE_WORKFLOW)
-    publish = workflow.split("\n  verify-public:", maxsplit=1)[0]
+    publish = workflow.split('\n  verify-public:', maxsplit=1)[0]
 
-    assert "anchore/scan-action@" in publish
-    assert "severity-cutoff: high" in publish
-    assert "fail-build: true" in publish
-    assert "sigstore/cosign-installer@" in publish
+    assert 'anchore/scan-action@' in publish
+    assert 'severity-cutoff: high' in publish
+    assert 'fail-build: true' in publish
+    assert 'sigstore/cosign-installer@' in publish
     assert 'cosign sign --yes "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"' in publish
-    assert "UID=10001" in publish
-    assert "GID=10001" in publish
-    assert "UV_VERSION=0.11.32" in publish
+    assert 'UID=10001' in publish
+    assert 'GID=10001' in publish
+    assert 'UV_VERSION=0.11.32' in publish
+
+
+def test_pull_requests_use_the_same_high_severity_container_gate() -> None:
+    workflow = _text(CI_WORKFLOW)
+    assert 'for command in git curl jq ffmpeg gcc make cargo rustc apk; do' in workflow
+    assert 'assert sys.version_info[:3] == (3, 14, 6)' in workflow
+    assert r'assert sys.prefix == \"/opt/venv\"' in workflow
+
+    assert 'container-security:' in workflow
+    assert 'docker/build-push-action@' in workflow
+    assert 'anchore/scan-action@' in workflow
+    assert 'severity-cutoff: high' in workflow
+    assert 'fail-build: true' in workflow
+    assert 'only-fixed: false' in workflow
+    assert 'Smoke-test the production application' in workflow
+    assert 'http://127.0.0.1:18080/health' in workflow
+    assert (
+        'pgvector/pgvector:0.8.1-pg17-trixie@sha256:'
+        '137f044b0efe3d57f39b972b9b53641b1f2045b99d879e298bbf514a25787dcf' in workflow
+    )
+    assert 'docker network create "$network"' in workflow
+    assert '--env "DATABASE_URL=$database_url"' in workflow
+    assert '--env "PGVECTOR_DB_URL=$database_url"' in workflow
+    assert 'PostgreSQL init process complete; ready for start up.' in workflow
+    assert "docker inspect --format 'app-state={{json .State}}'" in workflow
+    assert "docker image inspect --format '{{json .Config.Entrypoint}}'" in workflow
+    assert "docker image inspect --format '{{json .Config.Cmd}}'" in workflow
+    assert '--entrypoint python' in workflow
+    assert "import open_webui.main; print('open-webui-import-ok')" in workflow
+    assert '--env PYTHONFAULTHANDLER=1' in workflow
 
 
 def test_public_pull_and_signature_are_verified_in_an_independent_job() -> None:
     workflow = _text(IMAGE_WORKFLOW)
-    assert "\n  verify-public:\n" in workflow
-    publish, verify = workflow.split("\n  verify-public:\n", maxsplit=1)
+    assert '\n  verify-public:\n' in workflow
+    publish, verify = workflow.split('\n  verify-public:\n', maxsplit=1)
 
-    assert "Verify anonymous public pull" not in publish
-    assert "needs: publish" in verify
-    assert re.search(r"permissions:\s*\n\s+contents: read", verify)
-    assert "packages: write" not in verify
-    assert "id-token: write" not in verify
-    assert "docker/login-action@" not in verify
-    assert "DOCKER_CONFIG" in verify
-    assert "ghcr.io/token?service=ghcr.io" in verify
-    assert "docker-content-digest" in verify
-    assert "cosign verify" in verify
-    assert "--certificate-identity" in verify
-    assert "--certificate-oidc-issuer" in verify
+    assert 'Verify anonymous public pull' not in publish
+    assert 'needs: publish' in verify
+    assert re.search(r'permissions:\s*\n\s+contents: read', verify)
+    assert 'packages: write' not in verify
+    assert 'id-token: write' not in verify
+    assert 'docker/login-action@' not in verify
+    assert 'DOCKER_CONFIG' in verify
+    assert 'ghcr.io/token?service=ghcr.io' in verify
+    assert 'docker-content-digest' in verify
+    assert 'cosign verify' in verify
+    assert '--certificate-identity' in verify
+    assert '--certificate-oidc-issuer' in verify

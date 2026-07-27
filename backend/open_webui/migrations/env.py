@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import logging
+
 # Alembic environment configuration runner.
 # Coordinates database migrations in both offline and online execution modes.
 import logging.config
-import logging
+
 import alembic.context
 from open_webui.env import DATABASE_PASSWORD, DATABASE_URL, LOG_FORMAT
-from open_webui.internal.db import enable_iam_token_auth, extract_ssl_params_from_url, reattach_ssl_params_to_url
+from open_webui.internal.db import (
+    enable_iam_token_auth,
+    extract_ssl_params_from_url,
+    make_sync_database_url,
+    reattach_ssl_params_to_url,
+)
 from open_webui.models.auths import Auth
 from open_webui.models.calendar import Calendar, CalendarEvent, CalendarEventAttendee  # noqa: F401
 from sqlalchemy import create_engine, engine_from_config, pool
@@ -24,6 +31,7 @@ target_db_url = DATABASE_URL
 base_url, ssl_query_params = extract_ssl_params_from_url(target_db_url)
 if ssl_query_params:
     target_db_url = reattach_ssl_params_to_url(base_url, ssl_query_params)
+target_db_url = make_sync_database_url(target_db_url)
 if target_db_url:
     alembic_config.set_main_option('sqlalchemy.url', target_db_url.replace('%', '%%'))
 

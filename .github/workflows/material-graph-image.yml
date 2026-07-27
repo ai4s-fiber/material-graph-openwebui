@@ -68,7 +68,6 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           build-args: |
             BUILD_HASH=${{ env.SOURCE_SHA }}
-            USE_SLIM=true
             UID=10001
             GID=10001
             UV_VERSION=0.11.32
@@ -82,6 +81,7 @@ jobs:
           image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           severity-cutoff: high
           fail-build: true
+          only-fixed: false
           output-format: table
 
       - name: Generate SPDX SBOM from published image

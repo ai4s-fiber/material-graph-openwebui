@@ -68,10 +68,6 @@ class Vector:
                 )
 
                 return ElasticsearchClient()
-            case VectorType.CHROMA:
-                from open_webui.retrieval.vector.dbs.chroma import ChromaClient
-
-                return ChromaClient()
             case VectorType.ORACLE23AI:
                 from open_webui.retrieval.vector.dbs.oracle23ai import Oracle23aiClient
 

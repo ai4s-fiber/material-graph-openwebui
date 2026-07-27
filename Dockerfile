@@ -1,40 +1,23 @@
-# syntax=docker/dockerfile:1
-# Initialize device type args
-# use build args in the docker build command with --build-arg="BUILDARG=true"
-ARG USE_CUDA=false
-ARG USE_OLLAMA=false
-ARG USE_SLIM=false
-ARG USE_PERMISSION_HARDENING=false
-# Tested with cu117 for CUDA 11 and cu121 for CUDA 12 (default)
-ARG USE_CUDA_VER=cu128
-# any sentence transformer model; models to use can be found at https://huggingface.co/models?library=sentence-transformers
-# Leaderboard: https://huggingface.co/spaces/mteb/leaderboard 
-# for better performance and multilangauge support use "intfloat/multilingual-e5-large" (~2.5GB) or "intfloat/multilingual-e5-base" (~1.5GB)
-# IMPORTANT: If you change the embedding model (sentence-transformers/all-MiniLM-L6-v2) and vice versa, you aren't able to use RAG Chat with your previous documents loaded in the WebUI! You need to re-embed them.
-ARG USE_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-ARG USE_RERANKING_MODEL=""
-ARG USE_AUXILIARY_EMBEDDING_MODEL=TaylorAI/bge-micro-v2
+# syntax=docker/dockerfile:1.10
 
-# Tiktoken encoding name; models to use can be found at https://huggingface.co/models?library=tiktoken
-ARG USE_TIKTOKEN_ENCODING_NAME="cl100k_base"
+# Immutable upstream inputs reviewed on 2026-07-27. The Python build image and
+# the Wolfi runtime root are pinned independently so both supply-chain inputs
+# remain auditable while the final image stays package-manager free.
+ARG NODE_BASE=node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8
+ARG PYTHON_BUILD_BASE=cgr.dev/chainguard/python:latest-dev@sha256:7a568bcee42666f73f041645a41c913ce1d442f4c24cf6019bc543a90820e531
+ARG WOLFI_BASE=cgr.dev/chainguard/wolfi-base:latest@sha256:003627df3c1e1bba0c4116afcddb314aca9594ee2328c7e876a8081a6c988b2e
 
 ARG BUILD_HASH=dev-build
-# Material Graph release images run as a fixed unprivileged identity.
 ARG UID=10001
 ARG GID=10001
 ARG UV_VERSION=0.11.32
+ARG USE_PERMISSION_HARDENING=false
 
-######## WebUI frontend ########
-FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
+######## Frontend builder ####################################################
+FROM --platform=$BUILDPLATFORM ${NODE_BASE} AS frontend-build
+
 ARG BUILD_HASH
-
-# Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
-# ENV NODE_OPTIONS="--max-old-space-size=4096"
-
 WORKDIR /app
-
-# to store git revision in build
-RUN apk add --no-cache git
 
 COPY package.json package-lock.json ./
 RUN npm ci --force
@@ -43,169 +26,135 @@ COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}
 RUN npm run build
 
-######## WebUI backend ########
-FROM python:3.11-slim-bookworm AS base
+######## Python dependency builder ##########################################
+FROM ${PYTHON_BUILD_BASE} AS python-deps
 
-# Use args
-ARG USE_CUDA
-ARG USE_OLLAMA
-ARG USE_CUDA_VER
-ARG USE_SLIM
-ARG USE_PERMISSION_HARDENING
-ARG USE_EMBEDDING_MODEL
-ARG USE_RERANKING_MODEL
-ARG USE_AUXILIARY_EMBEDDING_MODEL
+USER root
+ARG UV_VERSION
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin \
+    UV_LINK_MODE=copy \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN set -eux; \
+    python --version | grep -F 'Python 3.14.6'; \
+    uv --version | grep -F "uv ${UV_VERSION}"; \
+    apk add --no-cache \
+      libpq-18=18.4-r7 \
+      libxml2-dev=2.15.3-r3 \
+      libxslt=1.1.45-r3 \
+      libxslt-dev=1.1.45-r3 \
+      postgresql-18-dev=18.4-r7 \
+      zlib-dev=1.3.2-r3; \
+    python -m venv --without-pip "$VIRTUAL_ENV"
+
+COPY backend/requirements-production.lock /tmp/requirements-production.lock
+RUN set -eux; \
+    uv pip install \
+      --python "$VIRTUAL_ENV/bin/python" \
+      --requirement /tmp/requirements-production.lock \
+      --require-hashes \
+      --no-deps \
+      --no-cache; \
+    "$VIRTUAL_ENV/bin/python" -c "import sys; import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert sys.version_info[:3] == (3, 14, 6); assert sys.prefix == '/opt/venv'; assert psycopg.pq.__impl__ == 'c'"; \
+    rm -f /tmp/requirements-production.lock
+
+######## Minimal runtime assembly ############################################
+FROM ${WOLFI_BASE} AS runtime-assembly
+
+USER root
 ARG UID
 ARG GID
-ARG UV_VERSION
+ARG USE_PERMISSION_HARDENING
 
-# Python settings
-ENV PYTHONUNBUFFERED=1
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin
 
-## Basis ##
-ENV ENV=prod \
-    PORT=8080 \
-    # pass build args to the build
-    USE_OLLAMA_DOCKER=${USE_OLLAMA} \
-    USE_CUDA_DOCKER=${USE_CUDA} \
-    USE_SLIM_DOCKER=${USE_SLIM} \
-    USE_CUDA_DOCKER_VER=${USE_CUDA_VER} \
-    USE_EMBEDDING_MODEL_DOCKER=${USE_EMBEDDING_MODEL} \
-    USE_RERANKING_MODEL_DOCKER=${USE_RERANKING_MODEL} \
-    USE_AUXILIARY_EMBEDDING_MODEL_DOCKER=${USE_AUXILIARY_EMBEDDING_MODEL}
-
-## Basis URL Config ##
-ENV OLLAMA_BASE_URL="/ollama" \
-    OPENAI_API_BASE_URL=""
-
-## API Key and Security Config ##
-ENV OPENAI_API_KEY="" \
-    WEBUI_SECRET_KEY="" \
-    SCARF_NO_ANALYTICS=true \
-    DO_NOT_TRACK=true \
-    ANONYMIZED_TELEMETRY=false
-
-#### Other models #########################################################
-## whisper TTS model settings ##
-ENV WHISPER_MODEL="base" \
-    WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models"
-
-## RAG Embedding model settings ##
-ENV RAG_EMBEDDING_MODEL="$USE_EMBEDDING_MODEL_DOCKER" \
-    RAG_RERANKING_MODEL="$USE_RERANKING_MODEL_DOCKER" \
-    AUXILIARY_EMBEDDING_MODEL="$USE_AUXILIARY_EMBEDDING_MODEL_DOCKER" \
-    SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models"
-
-## Tiktoken model settings ##
-ENV TIKTOKEN_ENCODING_NAME="cl100k_base" \
-    TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken"
-
-## Hugging Face download cache ##
-ENV HF_HOME="/app/backend/data/cache/embedding/models"
-
-## Torch Extensions ##
-# ENV TORCH_EXTENSIONS_DIR="/.cache/torch_extensions"
-
-#### Other models ##########################################################
-
-WORKDIR /app/backend
-
-ENV HOME=/home/app
 RUN set -eux; \
     test "$UID" -ne 0; \
     test "$GID" -ne 0; \
-    addgroup --gid "$GID" app; \
-    adduser --uid "$UID" --gid "$GID" --home "$HOME" --disabled-password --gecos "" app; \
-    install -d -o "$UID" -g "$GID" -m 0750 "$HOME/.cache/chroma"; \
+    apk add --no-cache \
+      bash=5.3-r12 \
+      libpq-18=18.4-r7 \
+      libxml2-16=2.15.3-r3 \
+      libxslt=1.1.45-r3 \
+      python-3.14=3.14.6-r4; \
+    apk del wolfi-base wolfi-keys apk-tools; \
+    ! command -v apk; \
     install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
-    echo -n 00000000-0000-0000-0000-000000000000 > "$HOME/.cache/chroma/telemetry_user_id"; \
-    chown "$UID:$GID" "$HOME/.cache/chroma/telemetry_user_id"
+    install -d -o "$UID" -g "$GID" -m 0750 /home/app/.cache; \
+    rm -rf /var/cache/apk/*
 
-# Make sure the runtime user owns the application and its home directory.
-RUN chown -R $UID:$GID /app $HOME
+COPY --from=python-deps /opt/venv /opt/venv
+COPY --chown=$UID:$GID --from=frontend-build /app/build /app/build
+COPY --chown=$UID:$GID --from=frontend-build /app/CHANGELOG.md /app/CHANGELOG.md
+COPY --chown=$UID:$GID --from=frontend-build /app/package.json /app/package.json
+COPY --chown=$UID:$GID backend/ /app/backend/
 
-# Install common system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    git build-essential pandoc gcc netcat-openbsd curl jq ca-certificates \
-    libmariadb-dev \
-    python3-dev \
-    ffmpeg libsm6 libxext6 zstd \
-    && rm -rf /var/lib/apt/lists/*
-
-# install python dependencies
-COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
-
-# Set UV_LINK_MODE to copy to prevent 0-byte file corruption in QEMU arm64 cross-builds
-ENV UV_LINK_MODE=copy
-
-RUN set -e; \
-    pip3 install --no-cache-dir "uv==${UV_VERSION}"; \
-    if [ "$USE_CUDA" = "true" ]; then \
-    # If you use CUDA the whisper and embedding model will be downloaded on first use
-    # fix: pin torch<=2.9.1 - torch 2.10.0 aarch64 wheels cause SIGILL on ARM devices (RPi 4 Cortex-A72) #21349
-    pip3 install 'torch<=2.9.1' torchvision torchaudio --index-url https://download.pytorch.org/whl/$USE_CUDA_DOCKER_VER --no-cache-dir; \
-    uv pip install --system -r requirements.txt --no-cache-dir; \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('AUXILIARY_EMBEDDING_MODEL', 'TaylorAI/bge-micro-v2'), device='cpu')"; \
-    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])"; \
-    python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"; \
-    python -c "import nltk; nltk.download('punkt_tab')"; \
-    else \
-    pip3 install 'torch<=2.9.1' torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir; \
-    uv pip install --system -r requirements.txt --no-cache-dir; \
-    if [ "$USE_SLIM" != "true" ]; then \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('AUXILIARY_EMBEDDING_MODEL', 'TaylorAI/bge-micro-v2'), device='cpu')"; \
-    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])"; \
-    python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"; \
-    python -c "import nltk; nltk.download('punkt_tab')"; \
-    fi; \
-    fi; \
+RUN set -eux; \
     install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
-    rm -rf /var/lib/apt/lists/*;
+    if [ "$USE_PERMISSION_HARDENING" = "true" ]; then \
+      chgrp -R 0 /app /home/app; \
+      chmod -R g+rwX /app /home/app; \
+      find /app /home/app -type d -exec chmod g+s {} +; \
+    fi; \
+    ! command -v git; \
+    ! command -v curl; \
+    ! command -v jq; \
+    ! command -v ffmpeg; \
+    ! command -v gcc; \
+    ! command -v make; \
+    ! command -v cargo; \
+    ! command -v rustc; \
+    ! command -v apk; \
+    ! "$VIRTUAL_ENV/bin/python" -m pip --version; \
+    "$VIRTUAL_ENV/bin/python" -c "import sys; import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert sys.version_info[:3] == (3, 14, 6); assert sys.prefix == '/opt/venv'; assert psycopg.pq.__impl__ == 'c'"
 
-# Install Ollama if requested
-RUN if [ "$USE_OLLAMA" = "true" ]; then \
-    date +%s > /tmp/ollama_build_hash && \
-    echo "Cache broken at timestamp: `cat /tmp/ollama_build_hash`" && \
-    curl -fsSL https://ollama.com/install.sh | sh && \
-    rm -rf /var/lib/apt/lists/*; \
-    fi
-
-# copy embedding weight from build
-# RUN mkdir -p /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2
-# COPY --from=build /app/onnx /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx
-
-# copy built frontend files
-COPY --chown=$UID:$GID --from=build /app/build /app/build
-COPY --chown=$UID:$GID --from=build /app/CHANGELOG.md /app/CHANGELOG.md
-COPY --chown=$UID:$GID --from=build /app/package.json /app/package.json
-
-# copy backend files
-COPY --chown=$UID:$GID ./backend .
-
-EXPOSE 8080
-
-HEALTHCHECK CMD curl --silent --fail http://localhost:${PORT:-8080}/health | jq -ne 'input.status == true' || exit 1
-
-# Minimal, atomic permission hardening for OpenShift (arbitrary UID):
-# - Group 0 owns /app and the runtime home
-# - Directories are group-writable and have SGID so new files inherit GID 0
-RUN if [ "$USE_PERMISSION_HARDENING" = "true" ]; then \
-    set -eux; \
-    chgrp -R 0 /app "$HOME" || true; \
-    chmod -R g+rwX /app "$HOME" || true; \
-    find /app -type d -exec chmod g+s {} + || true; \
-    find "$HOME" -type d -exec chmod g+s {} + || true; \
-    fi
-
-VOLUME ["/app/backend/data"]
-
-USER $UID:$GID
+######## Final package-manager-free image ####################################
+FROM scratch AS runtime
 
 ARG BUILD_HASH
-ENV WEBUI_BUILD_VERSION=${BUILD_HASH}
-ENV DOCKER=true
+ARG PYTHON_BUILD_BASE
+ARG WOLFI_BASE
+ARG UID
+ARG GID
 
-CMD [ "bash", "start.sh"]
+LABEL org.opencontainers.image.base.name="cgr.dev/chainguard/wolfi-base:latest" \
+      org.opencontainers.image.base.digest="sha256:003627df3c1e1bba0c4116afcddb314aca9594ee2328c7e876a8081a6c988b2e" \
+      io.ai4s.material-graph.python-build-base="${PYTHON_BUILD_BASE}" \
+      io.ai4s.material-graph.runtime-base="${WOLFI_BASE}"
+
+ENV ENV=prod \
+    PORT=8080 \
+    HOME=/home/app \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DOCKER=true \
+    USE_SLIM_DOCKER=true \
+    VECTOR_DB=pgvector \
+    BYPASS_PYDUB_PREPROCESSING=true \
+    OLLAMA_BASE_URL=/ollama \
+    OPENAI_API_BASE_URL="" \
+    OPENAI_API_KEY="" \
+    WEBUI_SECRET_KEY="" \
+    WEBUI_SECRET_KEY_FILE=/app/backend/data/.webui_secret_key \
+    SCARF_NO_ANALYTICS=true \
+    DO_NOT_TRACK=true \
+    ANONYMIZED_TELEMETRY=false \
+    WEBUI_BUILD_VERSION=${BUILD_HASH}
+
+WORKDIR /app/backend
+COPY --from=runtime-assembly / /
+
+EXPOSE 8080
+VOLUME ["/app/backend/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["python", "-c", "import json, os, urllib.request; response = urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"PORT\", \"8080\")}/health', timeout=4); assert json.load(response).get('status') is True"]
+
+USER $UID:$GID
+CMD ["bash", "start.sh"]
