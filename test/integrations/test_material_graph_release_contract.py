@@ -166,6 +166,22 @@ def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() ->
     assert 'UV_VERSION=0.11.32' in publish
 
 
+def test_release_image_identity_labels_follow_the_verified_source_commit() -> None:
+    workflow = _text(IMAGE_WORKFLOW)
+    publish = workflow.split('\n  verify-public:', maxsplit=1)[0]
+
+    assert 'SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}' in publish
+    assert 'ref: ${{ env.SOURCE_SHA }}' in publish
+    assert 'echo "IMAGE_TAG=sha-$SOURCE_SHA" >> "$GITHUB_ENV"' in publish
+    assert 'tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}' in publish
+    assert 'BUILD_HASH=${{ env.SOURCE_SHA }}' in publish
+    assert 'org.opencontainers.image.source=https://github.com/${{ github.repository }}' in publish
+    assert 'org.opencontainers.image.revision=${{ env.SOURCE_SHA }}' in publish
+    assert 'org.opencontainers.image.version=sha-${{ env.SOURCE_SHA }}' in publish
+    assert 'org.opencontainers.image.revision=${{ github.sha }}' not in publish
+    assert 'org.opencontainers.image.version=sha-${{ github.sha }}' not in publish
+
+
 def test_pull_requests_use_the_same_high_severity_container_gate() -> None:
     workflow = _text(CI_WORKFLOW)
     assert 'for command in git curl jq ffmpeg gcc make cargo rustc apk; do' in workflow
