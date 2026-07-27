@@ -105,7 +105,7 @@ jobs:
               ! command -v "$command"
             done
             ! python -m pip --version
-            python -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
+            python -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == \"c\""
           '
 
       - name: Smoke-test the production application

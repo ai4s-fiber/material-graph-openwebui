@@ -79,6 +79,7 @@ def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
     native_import_smoke = 'import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy'
     assert dockerfile.count(native_import_smoke) == 2
     assert native_import_smoke in _text(CI_WORKFLOW)
+    assert r'assert psycopg.pq.__impl__ == \"c\"' in _text(CI_WORKFLOW)
     assert 'zlib1g-dev' in dockerfile
     assert 'vector_db=pgvector' in dockerfile
     assert 'severity-cutoff' not in dockerfile
