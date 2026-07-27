@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 GRAPH = {'workflowdefinition', 'workflow_definition', 'workflow', 'graph'}
 NODE = {'nodestate', 'node_state', 'node_status', 'node'}
 TOKEN = {'token', 'text_delta', 'delta', 'assistant_token'}
+TOKEN = TOKEN | {'assistant_delta', 'assistant_message'}
 LOG = {'log', 'workflow_log', 'node_log'}
 FORM = {'assistant_form', 'assistantform', 'form'}
 TERMINAL = {'terminal', 'terminal_outcome', 'outcome', 'run_completed', 'run_terminal'}
@@ -35,6 +36,7 @@ class Pipe:
         self.name = 'Material Graph Studio'
         self.valves = self.Valves()
         self._runs = {}
+        self._assistant_text = {}
 
     async def pipe(self, body: dict[str, Any], __event_emitter__=None, **_: Any) -> AsyncIterator[str]:
         messages = body.get('messages') or []
@@ -166,11 +168,49 @@ class Pipe:
 
     async def _forward_event(self, event, base_url, emitter):
         name, version, data = self._payload(event)
+        version = version or event.get('contract_version')
         status = self._status(name, version, data, base_url)
         if status is not None and emitter is not None:
             await emitter({'type': 'status', 'data': status})
         elif name == 'status' and emitter is not None and isinstance(event.get('event'), dict):
             await emitter(event['event'])
+        if name in {'assistant_delta', 'assistant_message'}:
+            run = data.get('run_id') or data.get('runId')
+            run_key = str(run) if run else None
+            if name == 'assistant_delta':
+                token = data.get('delta') or data.get('token')
+                if token and run_key:
+                    previous = self._assistant_text.get(run_key)
+                    if previous is None and run_key in self._assistant_text:
+                        token = None
+                    else:
+                        token = str(token)
+                        self._assistant_text[run_key] = f'{previous or ""}{token}'
+                elif token:
+                    token = str(token)
+            else:
+                token = data.get('content') or data.get('delta')
+                if token and run_key:
+                    token = str(token)
+                    if run_key in self._assistant_text:
+                        previous = self._assistant_text[run_key]
+                        self._assistant_text[run_key] = None
+                        if previous is None:
+                            token = None
+                        elif token.startswith(previous):
+                            token = token[len(previous) :] or None
+                        else:
+                            token = None
+                    else:
+                        self._assistant_text[run_key] = None
+                elif token:
+                    token = str(token)
+            if token:
+                yield str(token)
+            error = event.get('error') or data.get('error')
+            if error:
+                raise RuntimeError(str(error))
+            return
         token = event.get('delta') or event.get('token')
         if not token and name in TOKEN:
             token = data.get('delta') or data.get('token') or data.get('text') or data.get('content')

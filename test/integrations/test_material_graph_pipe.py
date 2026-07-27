@@ -128,6 +128,44 @@ def test_token_and_non_success_terminal():
     assert terminal['outcome'] == 'budget_stopped'
 
 
+def test_v2_assistant_delta_and_final_message_are_not_duplicated():
+    pipe = Pipe()
+    delta = dict(
+        contract_version='material-graph.sse.v2',
+        type='assistant_delta',
+        event_type='assistant_delta',
+        run_id='r-v2',
+        content_mode='incremental',
+        source='provider',
+        delta='真实增量',
+        token='真实增量',
+    )
+    final = dict(
+        contract_version='material-graph.sse.v2',
+        type='assistant_message',
+        event_type='assistant_message',
+        run_id='r-v2',
+        content_mode='final',
+        content='真实增量',
+        delta='真实增量',
+    )
+    assert asyncio.run(forward(pipe, delta))[0] == ['真实增量']
+    assert asyncio.run(forward(pipe, final))[0] == []
+
+
+def test_v2_assistant_message_without_delta_is_forwarded_once():
+    final = dict(
+        contract_version='material-graph.sse.v2',
+        type='assistant_message',
+        event_type='assistant_message',
+        run_id='r-v2-final',
+        content_mode='final',
+        content='完整总结',
+        delta='完整总结',
+    )
+    assert asyncio.run(forward(Pipe(), final))[0] == ['完整总结']
+
+
 def test_non_authoritative_event_does_not_move_current_node():
     pipe = Pipe()
     asyncio.run(
