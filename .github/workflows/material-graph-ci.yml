@@ -33,7 +33,13 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install Pipe test runner
-        run: python -m pip install --disable-pip-version-check "pytest==8.4.2" "httpx==0.28.1" "pydantic==2.12.5"
+        run: >-
+          python -m pip install --disable-pip-version-check
+          "pytest==8.4.2"
+          "httpx==0.28.1"
+          "pydantic==2.12.5"
+          "typer==0.25.1"
+          "uvicorn==0.41.0"
 
       - name: Run Material Graph integration and release contract tests
         run: >-

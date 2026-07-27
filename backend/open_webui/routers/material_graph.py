@@ -71,9 +71,7 @@ async def _proxy(request: Request, user: object, upstream_path: str) -> Response
         await client.aclose()
         raise HTTPException(status_code=502, detail='Material Graph service is unavailable') from exc
 
-    response_headers = {
-        key: value for key, value in upstream.headers.items() if key.lower() in _RESPONSE_HEADERS
-    }
+    response_headers = {key: value for key, value in upstream.headers.items() if key.lower() in _RESPONSE_HEADERS}
     if upstream.headers.get('content-type', '').lower().startswith('text/event-stream'):
 
         async def stream() -> AsyncIterator[bytes]:
