@@ -35,24 +35,25 @@ root to repair host permissions.
 
 ## Minimal production runtime
 
-The container uses separate frontend, Rust-toolchain, and Python dependency
-builders. Node, Rust 1.88, Python, and the Python image's Debian Trixie root are
-all pinned by immutable SHA-256 digests in the Dockerfile. Only the frontend
-build, application source, and the hash-locked production virtual environment
-are copied into the final runtime.
+The container uses separate frontend and Python dependency builders plus a
+Wolfi runtime-assembly stage. Node, the Chainguard Python 3.14 development image,
+and the Chainguard Wolfi base are pinned by immutable SHA-256 index digests in
+the Dockerfile. The final `scratch` stage receives only the assembled runtime
+filesystem, frontend build, application source, and hash-locked production
+virtual environment; it inherits no package-manager or builder configuration.
 Installation uses `--require-hashes --no-deps`, so every Python artifact must
 match the reviewed lock. Compiler and development packages never cross the
-builder boundary. The runtime keeps only Debian's patched `libpq5` for psycopg3
-and the shared `libxml2`/`libxslt` libraries required by the document readers. It
-contains no `git`, `curl`, `jq`, `ffmpeg`, `gcc`, `make`, Rust toolchain, `pip`,
-or test tooling.
+builder boundary. The runtime pins Wolfi's `libpq-18`, `libxml2-16`, and
+`libxslt` packages, then removes `apk` before the final copy. It contains no
+`git`, `curl`, `jq`, `ffmpeg`, `gcc`, `make`, Rust toolchain, `pip`, package
+manager, or test tooling.
 
 The Material Graph deployment delegates local model inference, embeddings,
 reranking, browser automation, and document extraction to dedicated services. Its
 production dependency lock therefore omits Torch, ONNX, Whisper, Playwright, and
 alternate vector database clients. PostgreSQL/pgvector is the only in-process
 vector backend. Both SQLAlchemy execution paths explicitly use psycopg3; the
-production build compiles its C implementation against Debian `libpq` and does
+production build compiles its C implementation against Wolfi `libpq` and does
 not ship psycopg2 or the self-contained `psycopg-binary` wheel. ChromaDB support
 and `python-jose` were removed rather than
 suppressed because their dependency chains contained unfixed Critical/High

@@ -103,11 +103,11 @@ jobs:
           docker run --rm --entrypoint sh "$image" -ec '
             test "$(id -u)" = 10001
             test "$(id -g)" = 10001
-            for command in git curl jq ffmpeg gcc make cargo rustc; do
+            for command in git curl jq ffmpeg gcc make cargo rustc apk; do
               ! command -v "$command"
             done
             ! python -m pip --version
-            python -c "import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert psycopg.pq.__impl__ == \"c\""
+            python -c "import sys; import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert sys.version_info[:3] == (3, 14, 6); assert sys.prefix == \"/opt/venv\"; assert psycopg.pq.__impl__ == \"c\""
             python -m uvicorn --version
           '
 

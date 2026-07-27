@@ -25,7 +25,8 @@ def test_release_image_is_non_root_with_a_writable_data_volume() -> None:
     assert re.search(r'^ARG UID=10001$', dockerfile, re.MULTILINE)
     assert re.search(r'^ARG GID=10001$', dockerfile, re.MULTILINE)
     assert re.search(r'^ARG UV_VERSION=0\.11\.32$', dockerfile, re.MULTILINE)
-    assert 'python -m pip install --no-cache-dir "uv==${UV_VERSION}"' in dockerfile
+    assert 'uv --version | grep -F "uv ${UV_VERSION}"' in dockerfile
+    assert 'python -m pip install' not in dockerfile
     assert 'test "$UID" -ne 0' in dockerfile
     assert 'test "$GID" -ne 0' in dockerfile
     assert 'install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data' in dockerfile
@@ -37,7 +38,7 @@ def test_release_image_is_non_root_with_a_writable_data_volume() -> None:
 def test_release_image_pins_audited_base_images_and_separates_build_tools() -> None:
     dockerfile = _text(ROOT / 'Dockerfile')
 
-    for name in ('NODE_BASE', 'PYTHON_BASE', 'RUST_BASE', 'DEBIAN_BASE'):
+    for name in ('NODE_BASE', 'PYTHON_BUILD_BASE', 'WOLFI_BASE'):
         assert re.search(
             rf'^ARG {name}=[^\s]+@sha256:[0-9a-f]{{64}}$',
             dockerfile,
@@ -45,22 +46,53 @@ def test_release_image_pins_audited_base_images_and_separates_build_tools() -> N
         )
 
     assert 'AS frontend-build' in dockerfile
-    assert 'AS rust-toolchain' in dockerfile
     assert 'AS python-deps' in dockerfile
-    assert 'AS runtime' in dockerfile
+    assert 'AS runtime-assembly' in dockerfile
+    assert 'FROM scratch AS runtime' in dockerfile
+    assert 'AS rust-toolchain' not in dockerfile
     assert 'backend/requirements-production.lock' in dockerfile
     assert '--require-hashes' in dockerfile
     assert '--no-deps' in dockerfile
 
-    runtime = dockerfile.split('AS runtime', maxsplit=1)[1]
-    assert 'apt-get install -y --no-install-recommends libpq5 libxml2 libxslt1.1' in runtime
-    assert 'build-essential' not in runtime
-    assert 'libpq-dev' not in runtime
-    assert 'libxml2-dev' not in runtime
-    assert 'libxslt1-dev' not in runtime
-    assert 'zlib1g-dev' not in runtime
-    for executable in ('git', 'curl', 'jq', 'ffmpeg', 'gcc', 'make', 'cargo', 'rustc'):
-        assert f'! command -v {executable}' in runtime
+    builder = dockerfile.split('AS python-deps', maxsplit=1)[1]
+    builder = builder.split('AS runtime-assembly', maxsplit=1)[0]
+    for package in (
+        'libpq-18=18.4-r7',
+        'libxml2-dev=2.15.3-r3',
+        'libxslt=1.1.45-r3',
+        'libxslt-dev=1.1.45-r3',
+        'postgresql-18-dev=18.4-r7',
+        'zlib-dev=1.3.2-r3',
+    ):
+        assert package in builder
+    assert "python --version | grep -F 'Python 3.14.6'" in builder
+    assert "assert sys.prefix == '/opt/venv'" in builder
+
+    assembly = dockerfile.split('AS runtime-assembly', maxsplit=1)[1]
+    assembly = assembly.split('FROM scratch AS runtime', maxsplit=1)[0]
+    for package in (
+        'bash=5.3-r12',
+        'libpq-18=18.4-r7',
+        'libxml2-16=2.15.3-r3',
+        'libxslt=1.1.45-r3',
+        'python-3.14=3.14.6-r4',
+    ):
+        assert package in assembly
+    assert 'apk del wolfi-base wolfi-keys apk-tools' in assembly
+    assert 'ENV VIRTUAL_ENV=/opt/venv' in assembly
+    assert "assert sys.prefix == '/opt/venv'" in assembly
+    assert 'build-base' not in assembly
+    assert 'postgresql-18-dev' not in assembly
+    assert 'libxml2-dev' not in assembly
+    assert 'libxslt-dev' not in assembly
+    assert 'zlib-dev' not in assembly
+    for executable in ('git', 'curl', 'jq', 'ffmpeg', 'gcc', 'make', 'cargo', 'rustc', 'apk'):
+        assert f'! command -v {executable}' in assembly
+
+    runtime = dockerfile.split('FROM scratch AS runtime', maxsplit=1)[1]
+    assert 'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt' in runtime
+    assert 'COPY --from=runtime-assembly / /' in runtime
+    assert 'ENTRYPOINT' not in runtime
 
 
 def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
@@ -86,7 +118,7 @@ def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
     assert native_import_smoke in _text(CI_WORKFLOW)
     assert 'python -m uvicorn --version' in _text(CI_WORKFLOW)
     assert r'assert psycopg.pq.__impl__ == \"c\"' in _text(CI_WORKFLOW)
-    assert 'zlib1g-dev' in dockerfile
+    assert 'zlib-dev=1.3.2-r3' in dockerfile
     assert 'vector_db=pgvector' in dockerfile
     assert 'severity-cutoff' not in dockerfile
 
@@ -136,6 +168,9 @@ def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() ->
 
 def test_pull_requests_use_the_same_high_severity_container_gate() -> None:
     workflow = _text(CI_WORKFLOW)
+    assert 'for command in git curl jq ffmpeg gcc make cargo rustc apk; do' in workflow
+    assert 'assert sys.version_info[:3] == (3, 14, 6)' in workflow
+    assert r'assert sys.prefix == \"/opt/venv\"' in workflow
 
     assert 'container-security:' in workflow
     assert 'docker/build-push-action@' in workflow

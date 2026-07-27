@@ -1,12 +1,11 @@
 # syntax=docker/dockerfile:1.10
 
-# Immutable upstream inputs reviewed on 2026-07-27. The Python image is built
-# from Debian Trixie; its upstream Debian root is recorded separately so both
-# layers of the base-image chain remain auditable.
+# Immutable upstream inputs reviewed on 2026-07-27. The Python build image and
+# the Wolfi runtime root are pinned independently so both supply-chain inputs
+# remain auditable while the final image stays package-manager free.
 ARG NODE_BASE=node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8
-ARG PYTHON_BASE=python:3.15.0b4-slim-trixie@sha256:876977512a3f291014c1ffcc48cd6a05dcee034df0ebb9cd84f066355f575d44
-ARG RUST_BASE=rust:1.95.0-slim-trixie@sha256:e14e87345b4d5964ddcc3491d27ee046a0f23820f340c3c1e24da6880141f7c0
-ARG DEBIAN_BASE=debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
+ARG PYTHON_BUILD_BASE=cgr.dev/chainguard/python:latest-dev@sha256:7a568bcee42666f73f041645a41c913ce1d442f4c24cf6019bc543a90820e531
+ARG WOLFI_BASE=cgr.dev/chainguard/wolfi-base:latest@sha256:003627df3c1e1bba0c4116afcddb314aca9594ee2328c7e876a8081a6c988b2e
 
 ARG BUILD_HASH=dev-build
 ARG UID=10001
@@ -27,38 +26,28 @@ COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}
 RUN npm run build
 
-######## Rust toolchain input ################################################
-FROM ${RUST_BASE} AS rust-toolchain
-
 ######## Python dependency builder ##########################################
-FROM ${PYTHON_BASE} AS python-deps
+FROM ${PYTHON_BUILD_BASE} AS python-deps
 
+USER root
 ARG UV_VERSION
 ENV VIRTUAL_ENV=/opt/venv \
-    CARGO_HOME=/usr/local/cargo \
-    RUSTUP_HOME=/usr/local/rustup \
-    PATH=/opt/venv/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin \
     UV_LINK_MODE=copy \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
-COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
-
 RUN set -eux; \
-    rustc --version | grep -E '^rustc 1\.95\.'; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      build-essential \
-      libpq-dev \
-      libxml2-dev \
-      libxslt1-dev \
-      pkg-config \
-      zlib1g-dev; \
-    python -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
-    python -m venv --without-pip "$VIRTUAL_ENV"; \
-    apt-get clean; \
-    rm -rf /var/lib/apt/lists/*
+    python --version | grep -F 'Python 3.14.6'; \
+    uv --version | grep -F "uv ${UV_VERSION}"; \
+    apk add --no-cache \
+      libpq-18=18.4-r7 \
+      libxml2-dev=2.15.3-r3 \
+      libxslt=1.1.45-r3 \
+      libxslt-dev=1.1.45-r3 \
+      postgresql-18-dev=18.4-r7 \
+      zlib-dev=1.3.2-r3; \
+    python -m venv --without-pip "$VIRTUAL_ENV"
 
 COPY backend/requirements-production.lock /tmp/requirements-production.lock
 RUN set -eux; \
@@ -68,26 +57,80 @@ RUN set -eux; \
       --require-hashes \
       --no-deps \
       --no-cache; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"; \
+    "$VIRTUAL_ENV/bin/python" -c "import sys; import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert sys.version_info[:3] == (3, 14, 6); assert sys.prefix == '/opt/venv'; assert psycopg.pq.__impl__ == 'c'"; \
     rm -f /tmp/requirements-production.lock
 
-######## Minimal runtime #####################################################
-FROM ${PYTHON_BASE} AS runtime
+######## Minimal runtime assembly ############################################
+FROM ${WOLFI_BASE} AS runtime-assembly
 
-ARG BUILD_HASH
-ARG DEBIAN_BASE
+USER root
 ARG UID
 ARG GID
 ARG USE_PERMISSION_HARDENING
 
-LABEL org.opencontainers.image.base.name="docker.io/library/python:3.15.0b4-slim-trixie" \
-      io.ai4s.material-graph.debian-base="${DEBIAN_BASE}"
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin
+
+RUN set -eux; \
+    test "$UID" -ne 0; \
+    test "$GID" -ne 0; \
+    apk add --no-cache \
+      bash=5.3-r12 \
+      libpq-18=18.4-r7 \
+      libxml2-16=2.15.3-r3 \
+      libxslt=1.1.45-r3 \
+      python-3.14=3.14.6-r4; \
+    apk del wolfi-base wolfi-keys apk-tools; \
+    ! command -v apk; \
+    install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
+    install -d -o "$UID" -g "$GID" -m 0750 /home/app/.cache; \
+    rm -rf /var/cache/apk/*
+
+COPY --from=python-deps /opt/venv /opt/venv
+COPY --chown=$UID:$GID --from=frontend-build /app/build /app/build
+COPY --chown=$UID:$GID --from=frontend-build /app/CHANGELOG.md /app/CHANGELOG.md
+COPY --chown=$UID:$GID --from=frontend-build /app/package.json /app/package.json
+COPY --chown=$UID:$GID backend/ /app/backend/
+
+RUN set -eux; \
+    install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
+    if [ "$USE_PERMISSION_HARDENING" = "true" ]; then \
+      chgrp -R 0 /app /home/app; \
+      chmod -R g+rwX /app /home/app; \
+      find /app /home/app -type d -exec chmod g+s {} +; \
+    fi; \
+    ! command -v git; \
+    ! command -v curl; \
+    ! command -v jq; \
+    ! command -v ffmpeg; \
+    ! command -v gcc; \
+    ! command -v make; \
+    ! command -v cargo; \
+    ! command -v rustc; \
+    ! command -v apk; \
+    ! "$VIRTUAL_ENV/bin/python" -m pip --version; \
+    "$VIRTUAL_ENV/bin/python" -c "import sys; import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert sys.version_info[:3] == (3, 14, 6); assert sys.prefix == '/opt/venv'; assert psycopg.pq.__impl__ == 'c'"
+
+######## Final package-manager-free image ####################################
+FROM scratch AS runtime
+
+ARG BUILD_HASH
+ARG PYTHON_BUILD_BASE
+ARG WOLFI_BASE
+ARG UID
+ARG GID
+
+LABEL org.opencontainers.image.base.name="cgr.dev/chainguard/wolfi-base:latest" \
+      org.opencontainers.image.base.digest="sha256:003627df3c1e1bba0c4116afcddb314aca9594ee2328c7e876a8081a6c988b2e" \
+      io.ai4s.material-graph.python-build-base="${PYTHON_BUILD_BASE}" \
+      io.ai4s.material-graph.runtime-base="${WOLFI_BASE}"
 
 ENV ENV=prod \
     PORT=8080 \
     HOME=/home/app \
     VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DOCKER=true \
@@ -105,48 +148,7 @@ ENV ENV=prod \
     WEBUI_BUILD_VERSION=${BUILD_HASH}
 
 WORKDIR /app/backend
-
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends libpq5 libxml2 libxslt1.1; \
-    apt-get clean; \
-    rm -rf /var/lib/apt/lists/*; \
-    test "$UID" -ne 0; \
-    test "$GID" -ne 0; \
-    addgroup --gid "$GID" app; \
-    adduser --uid "$UID" --gid "$GID" --home "$HOME" --disabled-password --gecos "" app; \
-    install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
-    install -d -o "$UID" -g "$GID" -m 0750 "$HOME/.cache"; \
-    rm -rf \
-      /usr/local/bin/pip \
-      /usr/local/bin/pip3 \
-      /usr/local/bin/pip3.15 \
-      /usr/local/lib/python3.15/site-packages/pip* \
-      /usr/local/lib/python3.15/site-packages/setuptools* \
-      /usr/local/lib/python3.15/site-packages/wheel*
-
-COPY --from=python-deps /opt/venv /opt/venv
-COPY --chown=$UID:$GID --from=frontend-build /app/build /app/build
-COPY --chown=$UID:$GID --from=frontend-build /app/CHANGELOG.md /app/CHANGELOG.md
-COPY --chown=$UID:$GID --from=frontend-build /app/package.json /app/package.json
-COPY --chown=$UID:$GID backend/ /app/backend/
-
-RUN set -eux; \
-    install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
-    if [ "$USE_PERMISSION_HARDENING" = "true" ]; then \
-      chgrp -R 0 /app "$HOME"; \
-      chmod -R g+rwX /app "$HOME"; \
-      find /app "$HOME" -type d -exec chmod g+s {} +; \
-    fi; \
-    ! command -v git; \
-    ! command -v curl; \
-    ! command -v jq; \
-    ! command -v ffmpeg; \
-    ! command -v gcc; \
-    ! command -v make; \
-    ! command -v cargo; \
-    ! command -v rustc; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
+COPY --from=runtime-assembly / /
 
 EXPOSE 8080
 VOLUME ["/app/backend/data"]
