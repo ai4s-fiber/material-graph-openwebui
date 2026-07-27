@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 🔒 Report a Security Vulnerability
-    url: https://github.com/open-webui/open-webui/security
-    about: Do NOT open a public issue for security vulnerabilities, suspected vulnerabilities, or any security-related concern. Please review our Security Policy and report privately via the "Report a vulnerability" button so it can be handled as a private advisory.
+  - name: Material Graph Studio issue tracker
+    url: https://github.com/ai4s-fiber/material-graph-studio/issues/new/choose
+    about: Report Material Graph frontend bugs and request features in the single main project.
+  - name: Report a security vulnerability privately
+    url: https://github.com/ai4s-fiber/material-graph-studio/security/advisories/new
+    about: Never open a public issue or attach secrets, NAS credentials, environment dumps, or production data.
