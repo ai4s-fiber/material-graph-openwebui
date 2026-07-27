@@ -37,6 +37,7 @@ jobs:
           python -m pip install --disable-pip-version-check
           "pytest==8.4.2"
           "httpx==0.28.1"
+          "fastapi==0.136.3"
           "pydantic==2.12.5"
           "typer==0.25.1"
           "uvicorn==0.41.0"
