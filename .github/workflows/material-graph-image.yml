@@ -87,6 +87,10 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            org.opencontainers.image.version=sha-${{ env.SOURCE_SHA }}
           build-args: |
             BUILD_HASH=${{ env.SOURCE_SHA }}
             UID=10001

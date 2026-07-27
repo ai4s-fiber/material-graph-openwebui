@@ -1,5 +1,8 @@
 # Open WebUI 👋
 
+> [!NOTE]
+> This repository is the frontend dependency fork for [Material Graph Studio](https://github.com/ai4s-fiber/material-graph-studio), the single project entry point.
+
 ![GitHub stars](https://img.shields.io/github/stars/open-webui/open-webui?style=social)
 ![GitHub forks](https://img.shields.io/github/forks/open-webui/open-webui?style=social)
 ![GitHub watchers](https://img.shields.io/github/watchers/open-webui/open-webui?style=social)
