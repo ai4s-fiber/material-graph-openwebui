@@ -74,9 +74,11 @@ def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
         assert forbidden not in production_lock
         assert forbidden not in pyproject
 
+    assert 'black==26.5.1' in production_requirements
+    assert 'black==26.5.1' in production_lock
     assert 'psycopg-c==3.3.4' in production_lock
     assert "psycopg.pq.__impl__ == 'c'" in dockerfile
-    native_import_smoke = 'import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy'
+    native_import_smoke = 'import aiohttp, black, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy'
     assert dockerfile.count(native_import_smoke) == 2
     assert native_import_smoke in _text(CI_WORKFLOW)
     assert 'python -m uvicorn --version' in _text(CI_WORKFLOW)
@@ -139,6 +141,11 @@ def test_pull_requests_use_the_same_high_severity_container_gate() -> None:
     assert '--env "PGVECTOR_DB_URL=$database_url"' in workflow
     assert 'PostgreSQL init process complete; ready for start up.' in workflow
     assert "docker inspect --format 'app-state={{json .State}}'" in workflow
+    assert "docker image inspect --format '{{json .Config.Entrypoint}}'" in workflow
+    assert "docker image inspect --format '{{json .Config.Cmd}}'" in workflow
+    assert '--entrypoint python' in workflow
+    assert "import open_webui.main; print('open-webui-import-ok')" in workflow
+    assert '--env PYTHONFAULTHANDLER=1' in workflow
 
 
 def test_public_pull_and_signature_are_verified_in_an_independent_job() -> None:

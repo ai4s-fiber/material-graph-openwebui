@@ -98,6 +98,8 @@ jobs:
           set -euo pipefail
           image="material-graph-openwebui:ci-${GITHUB_SHA}"
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "10001:10001"
+          test "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$image")" = "null"
+          test "$(docker image inspect --format '{{json .Config.Cmd}}' "$image")" = '["bash","start.sh"]'
           docker run --rm --entrypoint sh "$image" -ec '
             test "$(id -u)" = 10001
             test "$(id -g)" = 10001
@@ -105,7 +107,7 @@ jobs:
               ! command -v "$command"
             done
             ! python -m pip --version
-            python -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == \"c\""
+            python -c "import aiohttp, black, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == \"c\""
             python -m uvicorn --version
           '
 
@@ -160,11 +162,20 @@ jobs:
             sleep 2
           done
           docker exec "$db_container" pg_isready --username postgres --dbname openwebui >/dev/null
+          docker run --rm \
+            --network "$network" \
+            --env "DATABASE_URL=$database_url" \
+            --env "PGVECTOR_DB_URL=$database_url" \
+            --env WEBUI_SECRET_KEY=material-graph-ci-import-check \
+            --entrypoint python \
+            "$image" \
+            -c "import open_webui.main; print('open-webui-import-ok')"
           docker run --detach --name "$container" \
             --network "$network" \
             --publish 127.0.0.1:18080:8080 \
             --env "DATABASE_URL=$database_url" \
             --env "PGVECTOR_DB_URL=$database_url" \
+            --env PYTHONFAULTHANDLER=1 \
             "$image"
           for attempt in $(seq 1 60); do
             response=""

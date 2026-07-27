@@ -68,7 +68,7 @@ RUN set -eux; \
       --require-hashes \
       --no-deps \
       --no-cache; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"; \
+    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, black, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"; \
     rm -f /tmp/requirements-production.lock
 
 ######## Minimal runtime #####################################################
@@ -146,7 +146,7 @@ RUN set -eux; \
     ! command -v make; \
     ! command -v cargo; \
     ! command -v rustc; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
+    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, black, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
 
 EXPOSE 8080
 VOLUME ["/app/backend/data"]
