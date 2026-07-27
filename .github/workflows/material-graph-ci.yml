@@ -45,6 +45,7 @@ jobs:
         run: >-
           python -m pytest
           test/integrations/test_material_graph_pipe.py
+          test/integrations/test_material_graph_hmac_contract.py
           test/integrations/test_material_graph_release_contract.py
           -q
 
