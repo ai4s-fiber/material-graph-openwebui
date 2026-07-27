@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "contract_id": "material-graph-openwebui-hmac",
+  "contract_version": "hmac-v1",
+  "snapshot_path": "contracts/openwebui/hmac-v1.json",
+  "canonical_sha256": "18ec590ef0486b174acbd5af5e1f165fdb6430b7c46eef78263f3c5f1bdf67dc",
+  "source_repository": "https://github.com/ai4s-fiber/material-graph-studio",
+  "source_path": "contracts/openwebui/hmac-v1.json",
+  "source_commit": "cd6b29b4c2293d521fa11ad6c5955dadeb8864b3",
+  "publishable": true
+}

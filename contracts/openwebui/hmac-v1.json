@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "contract_id": "material-graph-openwebui-hmac",
+  "contract_version": "hmac-v1",
+  "status": "frozen",
+  "headers": {
+    "user_context": "X-Material-Graph-User-Context",
+    "request_id": "X-Request-ID"
+  },
+  "token": {
+    "version": "v1",
+    "algorithm": "HMAC-SHA256",
+    "payload_encoding": "base64url-without-padding",
+    "signature_encoding": "base64url-without-padding",
+    "canonical_json": {
+      "encoding": "UTF-8",
+      "ensure_ascii": false,
+      "sort_keys": true,
+      "separators": [
+        ",",
+        ":"
+      ],
+      "claims": [
+        "exp",
+        "method",
+        "path",
+        "request_id",
+        "roles",
+        "user_id"
+      ]
+    }
+  },
+  "vectors": [
+    {
+      "id": "resume-stream-sse",
+      "description": "TEST ONLY: one short-lived Open WebUI BFF request bound to the API resume-stream path; the repeated-character secret is intentionally low entropy.",
+      "secret_utf8": "00000000000000000000000000000000",
+      "now": 1800000000,
+      "max_ttl_seconds": 60,
+      "request": {
+        "method": "POST",
+        "path": "/runs/run-123/resume/stream"
+      },
+      "claims": {
+        "user_id": "researcher-张三",
+        "roles": [
+          "researcher",
+          "user"
+        ],
+        "request_id": "owui-request-12345678",
+        "exp": 1800000030,
+        "method": "POST",
+        "path": "/runs/run-123/resume/stream"
+      },
+      "canonical_payload_utf8": "{\"exp\":1800000030,\"method\":\"POST\",\"path\":\"/runs/run-123/resume/stream\",\"request_id\":\"owui-request-12345678\",\"roles\":[\"researcher\",\"user\"],\"user_id\":\"researcher-张三\"}",
+      "payload_segment": "eyJleHAiOjE4MDAwMDAwMzAsIm1ldGhvZCI6IlBPU1QiLCJwYXRoIjoiL3J1bnMvcnVuLTEyMy9yZXN1bWUvc3RyZWFtIiwicmVxdWVzdF9pZCI6Im93dWktcmVxdWVzdC0xMjM0NTY3OCIsInJvbGVzIjpbInJlc2VhcmNoZXIiLCJ1c2VyIl0sInVzZXJfaWQiOiJyZXNlYXJjaGVyLeW8oOS4iSJ9",
+      "signature_segment": "Gs774K3p4j1iCgcz3clGZBRYSR0sN0WQZ_ngFoltPOU",
+      "token_value": "v1.eyJleHAiOjE4MDAwMDAwMzAsIm1ldGhvZCI6IlBPU1QiLCJwYXRoIjoiL3J1bnMvcnVuLTEyMy9yZXN1bWUvc3RyZWFtIiwicmVxdWVzdF9pZCI6Im93dWktcmVxdWVzdC0xMjM0NTY3OCIsInJvbGVzIjpbInJlc2VhcmNoZXIiLCJ1c2VyIl0sInVzZXJfaWQiOiJyZXNlYXJjaGVyLeW8oOS4iSJ9.Gs774K3p4j1iCgcz3clGZBRYSR0sN0WQZ_ngFoltPOU"
+    }
+  ]
+}
