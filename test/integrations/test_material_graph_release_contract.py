@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[2]
 IMAGE_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-image.yml'
 CI_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-ci.yml'
 FRONTEND_WORKFLOW = ROOT / '.github' / 'workflows' / 'frontend.yaml'
+RELEASE_IMAGE = 'ghcr.io/ai4s-fiber/material-graph-openwebui-release'
+RELEASE_REPOSITORY = 'ai4s-fiber/material-graph-openwebui-release'
 
 
 def _text(path: Path) -> str:
@@ -180,6 +182,29 @@ def test_release_image_identity_labels_follow_the_verified_source_commit() -> No
     assert 'org.opencontainers.image.version=sha-${{ env.SOURCE_SHA }}' in publish
     assert 'org.opencontainers.image.revision=${{ github.sha }}' not in publish
     assert 'org.opencontainers.image.version=sha-${{ github.sha }}' not in publish
+
+
+def test_release_targets_a_clean_package_only_after_successful_main_ci() -> None:
+    workflow = _text(IMAGE_WORKFLOW)
+    publish, verify = workflow.split('\n  verify-public:\n', maxsplit=1)
+
+    assert "workflows: ['Material Graph CI']" in workflow
+    assert 'types: [completed]' in workflow
+    assert "github.event.workflow_run.conclusion == 'success'" in publish
+    assert "github.event.workflow_run.event == 'push'" in publish
+    assert "github.event.workflow_run.head_branch == 'main'" in publish
+    assert 'github.event.workflow_run.head_repository.full_name == github.repository' in publish
+    assert 'SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}' in publish
+    assert 'echo "IMAGE_TAG=sha-$SOURCE_SHA" >> "$GITHUB_ENV"' in publish
+
+    assert f'IMAGE_NAME: {RELEASE_IMAGE}' in workflow
+    assert f'REGISTRY_REPOSITORY: {RELEASE_REPOSITORY}' in workflow
+    assert 'IMAGE_NAME: ghcr.io/${{ github.repository }}' not in workflow
+    assert 'repository="${GITHUB_REPOSITORY,,}"' not in verify
+    assert 'repository="$REGISTRY_REPOSITORY"' in verify
+    assert 'tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}' in publish
+    assert '${IMAGE_NAME}@${{ steps.build.outputs.digest }}' in publish
+    assert '"${IMAGE_NAME}@${IMAGE_DIGEST}"' in verify
 
 
 def test_pull_requests_use_the_same_high_severity_container_gate() -> None:
