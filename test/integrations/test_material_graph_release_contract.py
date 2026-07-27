@@ -58,6 +58,7 @@ def test_release_image_pins_audited_base_images_and_separates_build_tools() -> N
     assert 'libpq-dev' not in runtime
     assert 'libxml2-dev' not in runtime
     assert 'libxslt1-dev' not in runtime
+    assert 'zlib1g-dev' not in runtime
     for executable in ('git', 'curl', 'jq', 'ffmpeg', 'gcc', 'make', 'cargo', 'rustc'):
         assert f'! command -v {executable}' in runtime
 
@@ -75,6 +76,10 @@ def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
 
     assert 'psycopg-c==3.3.4' in production_lock
     assert "psycopg.pq.__impl__ == 'c'" in dockerfile
+    native_import_smoke = 'import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy'
+    assert dockerfile.count(native_import_smoke) == 2
+    assert native_import_smoke in _text(CI_WORKFLOW)
+    assert 'zlib1g-dev' in dockerfile
     assert 'vector_db=pgvector' in dockerfile
     assert 'severity-cutoff' not in dockerfile
 

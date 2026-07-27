@@ -53,7 +53,8 @@ RUN set -eux; \
       libpq-dev \
       libxml2-dev \
       libxslt1-dev \
-      pkg-config; \
+      pkg-config \
+      zlib1g-dev; \
     python -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     python -m venv --without-pip "$VIRTUAL_ENV"; \
     apt-get clean; \
@@ -67,7 +68,7 @@ RUN set -eux; \
       --require-hashes \
       --no-deps \
       --no-cache; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"; \
+    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"; \
     rm -f /tmp/requirements-production.lock
 
 ######## Minimal runtime #####################################################
@@ -145,7 +146,7 @@ RUN set -eux; \
     ! command -v make; \
     ! command -v cargo; \
     ! command -v rustc; \
-    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
+    "$VIRTUAL_ENV/bin/python" -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == 'c'"
 
 EXPOSE 8080
 VOLUME ["/app/backend/data"]
