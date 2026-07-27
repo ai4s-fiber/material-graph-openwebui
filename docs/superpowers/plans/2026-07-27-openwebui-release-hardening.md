@@ -2,9 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Publish the Material Graph Open WebUI image as a reproducible non-root container with vulnerability gating, keyless signing, and an independent anonymous verification boundary.
+**Goal:** Publish the Material Graph Open WebUI image to the dedicated `ghcr.io/ai4s-fiber/material-graph-openwebui-release` package as a reproducible non-root container with vulnerability gating, keyless signing, and an independent anonymous verification boundary.
 
 **Architecture:** Keep the existing Open WebUI Dockerfile and workflow-run publishing model. Harden the final image to UID/GID 10001, preserve writable named-volume initialization for `/app/backend/data`, pin the `uv` installer, and extend the existing immutable GHCR workflow with pinned actions, Grype, Cosign, and a separate credential-free verification job.
+
+The source repository keeps the name `material-graph-openwebui`. The dedicated
+release package is additive and does not delete, publish, or otherwise mutate
+the legacy package or any historical version.
 
 **Tech Stack:** Docker BuildKit, GitHub Actions, GHCR, Grype, SPDX SBOM, GitHub artifact attestations, Sigstore Cosign, pytest, Vitest, SvelteKit/Vite.
 

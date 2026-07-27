@@ -12,13 +12,18 @@ concurrency:
   group: material-graph-image-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
+env:
+  IMAGE_NAME: ghcr.io/ai4s-fiber/material-graph-openwebui-release
+  REGISTRY_REPOSITORY: ai4s-fiber/material-graph-openwebui-release
+
 jobs:
   publish:
     name: Build, attest, and publish exact commit
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -30,7 +35,6 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
 
     env:
-      IMAGE_NAME: ghcr.io/${{ github.repository }}
       SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
@@ -164,19 +168,18 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          repository="${GITHUB_REPOSITORY,,}"
+          test "$IMAGE_NAME" = "ghcr.io/$REGISTRY_REPOSITORY"
           anonymous_docker_config="$RUNNER_TEMP/anonymous-docker"
           mkdir -p "$anonymous_docker_config"
           printf '{"auths":{}}\n' > "$anonymous_docker_config/config.json"
           echo "DOCKER_CONFIG=$anonymous_docker_config" >> "$GITHUB_ENV"
-          echo "IMAGE_NAME=ghcr.io/$repository" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=sha-$SOURCE_SHA" >> "$GITHUB_ENV"
 
       - name: Verify anonymous public pull metadata and exact digest
         shell: bash
         run: |
           set -euo pipefail
-          repository="${GITHUB_REPOSITORY,,}"
+          repository="$REGISTRY_REPOSITORY"
           token="$(curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
             "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull" \
             | jq -r '.token')"

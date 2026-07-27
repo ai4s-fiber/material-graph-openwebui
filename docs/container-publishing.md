@@ -7,8 +7,14 @@ commit recorded by the completed CI run, not the branch tip at publish time.
 Published references use only this form:
 
 ```text
-ghcr.io/ai4s-fiber/material-graph-openwebui:sha-<40-character-commit>
+ghcr.io/ai4s-fiber/material-graph-openwebui-release:sha-<40-character-commit>
 ```
+
+The `material-graph-openwebui-release` package is a dedicated clean release
+surface. The source repository remains
+`ai4s-fiber/material-graph-openwebui`; this workflow neither renames that
+repository nor deletes, publishes, or mutates the legacy
+`material-graph-openwebui` package and its historical versions.
 
 GitHub organization package visibility must be configured as public once by a
 package administrator. The workflow does not change package visibility. A separate
@@ -18,7 +24,7 @@ signature before succeeding. The workflow never creates or updates `latest`.
 Production deployments should pin the registry digest returned by GHCR:
 
 ```text
-ghcr.io/ai4s-fiber/material-graph-openwebui@sha256:<digest>
+ghcr.io/ai4s-fiber/material-graph-openwebui-release@sha256:<digest>
 ```
 
 The publishing job uses only the repository-scoped `GITHUB_TOKEN` and GitHub
