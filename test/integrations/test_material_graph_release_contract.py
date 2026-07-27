@@ -129,6 +129,13 @@ def test_pull_requests_use_the_same_high_severity_container_gate() -> None:
     assert 'only-fixed: false' in workflow
     assert 'Smoke-test the production application' in workflow
     assert 'http://127.0.0.1:18080/health' in workflow
+    assert (
+        'pgvector/pgvector:0.8.1-pg17-trixie@sha256:'
+        '137f044b0efe3d57f39b972b9b53641b1f2045b99d879e298bbf514a25787dcf' in workflow
+    )
+    assert 'docker network create "$network"' in workflow
+    assert '--env "DATABASE_URL=$database_url"' in workflow
+    assert '--env "PGVECTOR_DB_URL=$database_url"' in workflow
 
 
 def test_public_pull_and_signature_are_verified_in_an_independent_job() -> None:

@@ -114,18 +114,50 @@ jobs:
           set -euo pipefail
           image="material-graph-openwebui:ci-${GITHUB_SHA}"
           container="material-graph-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          db_image="pgvector/pgvector:0.8.1-pg17-trixie@sha256:137f044b0efe3d57f39b972b9b53641b1f2045b99d879e298bbf514a25787dcf"
+          network="material-graph-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          db_container="material-graph-db-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          db_password="materialgraph${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
+          database_url="postgresql://postgres:${db_password}@${db_container}:5432/openwebui"
           cleanup() {
-            docker logs "$container" 2>/dev/null || true
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              docker logs "$container" 2>/dev/null || true
+              docker logs "$db_container" 2>/dev/null || true
+            fi
             docker rm --force "$container" >/dev/null 2>&1 || true
+            docker rm --force "$db_container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            exit "$status"
           }
           trap cleanup EXIT
+          docker network create "$network"
+          docker run --detach --name "$db_container" \
+            --network "$network" \
+            --env POSTGRES_DB=openwebui \
+            --env POSTGRES_USER=postgres \
+            --env "POSTGRES_PASSWORD=$db_password" \
+            "$db_image"
+          for attempt in $(seq 1 30); do
+            if docker exec "$db_container" pg_isready --username postgres --dbname openwebui >/dev/null 2>&1; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$db_container" | grep -qx true; then
+              exit 1
+            fi
+            sleep 2
+          done
+          docker exec "$db_container" pg_isready --username postgres --dbname openwebui >/dev/null
           docker run --detach --name "$container" \
+            --network "$network" \
             --publish 127.0.0.1:18080:8080 \
+            --env "DATABASE_URL=$database_url" \
+            --env "PGVECTOR_DB_URL=$database_url" \
             "$image"
           for attempt in $(seq 1 60); do
-            if curl --fail --silent --show-error \
-              http://127.0.0.1:18080/health \
-              | python -c "import json, sys; assert json.load(sys.stdin).get('status') is True"; then
+            response=""
+            if response="$(curl --fail --silent http://127.0.0.1:18080/health 2>/dev/null)" \
+              && python -c "import json, sys; assert json.load(sys.stdin).get('status') is True" <<<"$response"; then
               exit 0
             fi
             if ! docker inspect --format '{{.State.Running}}' "$container" | grep -qx true; then
