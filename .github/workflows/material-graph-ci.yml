@@ -106,6 +106,7 @@ jobs:
             done
             ! python -m pip --version
             python -c "import aiohttp, fastapi, orjson, pgvector, psycopg, pydantic, sqlalchemy; from lxml import etree; assert psycopg.pq.__impl__ == \"c\""
+            python -m uvicorn --version
           '
 
       - name: Smoke-test the production application
@@ -122,6 +123,7 @@ jobs:
           cleanup() {
             status=$?
             if [ "$status" -ne 0 ]; then
+              docker inspect --format 'app-state={{json .State}}' "$container" 2>/dev/null || true
               docker logs "$container" 2>/dev/null || true
               docker logs "$db_container" 2>/dev/null || true
             fi
