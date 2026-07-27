@@ -91,6 +91,16 @@ def test_unfixed_dependency_stacks_are_absent_from_production() -> None:
     assert 'severity-cutoff' not in dockerfile
 
 
+def test_pgvector_uses_psycopg3_when_the_runtime_uses_postgres() -> None:
+    pgvector = _text(ROOT / 'backend' / 'open_webui' / 'retrieval' / 'vector' / 'dbs' / 'pgvector.py')
+
+    assert "def _make_sync_pgvector_url(url: str) -> str:" in pgvector
+    assert "postgresql+psycopg2://', 'postgresql+psycopg://" in pgvector
+    assert "postgresql://', 'postgresql+psycopg://" in pgvector
+    assert 'if PGVECTOR_DB_URL:' in pgvector
+    assert 'PGVECTOR_DB_URL = _make_sync_pgvector_url(PGVECTOR_DB_URL)' in pgvector
+
+
 def test_material_graph_workflows_pin_every_action_to_a_commit() -> None:
     _assert_actions_are_commit_pinned(CI_WORKFLOW)
     _assert_actions_are_commit_pinned(IMAGE_WORKFLOW)

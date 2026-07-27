@@ -60,6 +60,27 @@ Base = declarative_base()
 log = logging.getLogger(__name__)
 
 
+def _make_sync_pgvector_url(url: str) -> str:
+    """Select psycopg3 for the synchronous pgvector SQLAlchemy engine.
+
+    The production image intentionally contains psycopg3 rather than the
+    legacy psycopg2 package. SQLAlchemy maps a bare ``postgresql://`` URL to
+    psycopg2, so normalize legacy PostgreSQL spellings before creating the
+    pgvector engine.
+    """
+    if url.startswith('postgresql+psycopg2://'):
+        return url.replace('postgresql+psycopg2://', 'postgresql+psycopg://', 1)
+    if url.startswith('postgresql://'):
+        return url.replace('postgresql://', 'postgresql+psycopg://', 1)
+    if url.startswith('postgres://'):
+        return url.replace('postgres://', 'postgresql+psycopg://', 1)
+    return url
+
+
+if PGVECTOR_DB_URL:
+    PGVECTOR_DB_URL = _make_sync_pgvector_url(PGVECTOR_DB_URL)
+
+
 def pgcrypto_encrypt(val, key):
     return func.pgp_sym_encrypt(val, literal(key))
 
