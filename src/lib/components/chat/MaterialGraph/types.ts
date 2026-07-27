@@ -40,13 +40,27 @@ export interface WorkflowDefinition {
 	edges: MaterialGraphEdge[];
 	[key: string]: unknown;
 }
+export interface MaterialGraphPatch {
+	set?: Record<string, unknown>;
+	unset?: string[];
+	node_updates?: MaterialGraphNode[];
+	logs?: MaterialGraphLog[];
+}
 export interface MaterialGraphSnapshot {
 	action?: 'material_graph';
+	event_type?: string;
 	run_id: string;
 	contract_version?: string;
+	graph_version?: number;
+	base_version?: number;
+	patch?: MaterialGraphPatch;
+	resync_required?: boolean;
+	resync_url?: string;
 	workflow?: WorkflowDefinition;
+	workflow_definition?: WorkflowDefinition;
 	checkpoint_id?: string;
 	current_node?: string | null;
+	route_signal?: string | null;
 	nodes: MaterialGraphNode[];
 	edges: MaterialGraphEdge[];
 	elapsed_ms?: number;
@@ -55,6 +69,9 @@ export interface MaterialGraphSnapshot {
 	done?: boolean;
 	success?: boolean;
 	outcome?: string;
+	error_code?: string;
+	retryable?: boolean;
+	retry_after_seconds?: number;
 }
 export interface AssistantFormField {
 	name?: string;
@@ -94,4 +111,9 @@ export type ResumeEvent = {
 	status?: MaterialGraphSnapshot | AssistantFormDefinition;
 	raw?: unknown;
 };
-export { latestAssistantForm, latestMaterialGraph } from './contract';
+export {
+	appendMaterialGraphStatus,
+	latestAssistantForm,
+	latestMaterialGraph,
+	materialGraphTopologyKey
+} from './contract';

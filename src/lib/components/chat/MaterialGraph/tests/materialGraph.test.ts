@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { latestAssistantForm, reduceMaterialGraph, outcomeLabel } from '../contract';
+import {
+	appendMaterialGraphStatus,
+	latestAssistantForm,
+	materialGraphTopologyKey,
+	reduceMaterialGraph,
+	outcomeLabel
+} from '../contract';
 import { layoutWorkflow } from '../layout';
 
 describe('Material Graph contracts', () => {
@@ -48,5 +54,98 @@ describe('Material Graph contracts', () => {
 				{ action: 'assistant_form', form_id: 'new', run_id: 'r' }
 			])?.form_id
 		).toBe('new');
+	});
+	it('reconstructs versioned snapshot and delta events', () => {
+		const graph = reduceMaterialGraph([
+			{
+				action: 'material_graph',
+				event_type: 'graph_snapshot',
+				run_id: 'r2',
+				graph_version: 1,
+				nodes: [
+					{ id: 'intake', label: 'Intake', status: 'running' },
+					{ id: 'gate', label: 'Gate', status: 'pending' }
+				],
+				edges: [{ source: 'intake', target: 'gate' }],
+				logs: []
+			},
+			{
+				action: 'material_graph',
+				event_type: 'graph_delta',
+				run_id: 'r2',
+				base_version: 1,
+				graph_version: 2,
+				patch: {
+					set: { current_node: 'gate', elapsed_ms: 800 },
+					node_updates: [
+						{ id: 'intake', label: 'Intake', status: 'complete' },
+						{ id: 'gate', label: 'Gate', status: 'running' }
+					],
+					logs: [{ node_id: 'intake', message: 'done' }]
+				}
+			}
+		]);
+		expect(graph?.graph_version).toBe(2);
+		expect(graph?.current_node).toBe('gate');
+		expect(graph?.nodes.map((node) => node.status)).toEqual(['complete', 'running']);
+		expect(graph?.logs?.[0].message).toBe('done');
+		expect(graph?.resync_required).toBe(false);
+	});
+	it('marks a version gap for resynchronization', () => {
+		const graph = reduceMaterialGraph([
+			{
+				action: 'material_graph',
+				event_type: 'graph_snapshot',
+				run_id: 'r3',
+				graph_version: 1,
+				nodes: [],
+				edges: []
+			},
+			{
+				action: 'material_graph',
+				event_type: 'graph_delta',
+				run_id: 'r3',
+				base_version: 2,
+				graph_version: 3,
+				resync_url: '/runs/r3/graph',
+				patch: { set: { current_node: 'gate' } }
+			}
+		]);
+		expect(graph?.graph_version).toBe(1);
+		expect(graph?.resync_required).toBe(true);
+		expect(graph?.resync_url).toBe('/runs/r3/graph');
+	});
+	it('compacts status history without losing the latest graph', () => {
+		let history: any[] = [];
+		for (let version = 1; version <= 300; version++)
+			history = appendMaterialGraphStatus(history, {
+				action: 'material_graph',
+				event_type: 'graph_snapshot',
+				run_id: 'r4',
+				graph_version: version,
+				current_node: 'intake',
+				nodes: [
+					{ id: 'intake', label: 'Intake', status: version === 300 ? 'complete' : 'running' }
+				],
+				edges: [],
+				logs: []
+			});
+		expect(history.length).toBeLessThanOrEqual(128);
+		expect(reduceMaterialGraph(history)?.graph_version).toBe(300);
+	});
+	it('changes the layout key only when topology changes', () => {
+		const running = {
+			run_id: 'r5',
+			current_node: 'intake',
+			nodes: [{ id: 'intake', label: 'Intake', status: 'running' }],
+			edges: []
+		};
+		const complete = { ...running, nodes: [{ id: 'intake', label: 'Intake', status: 'complete' }] };
+		const expanded = {
+			...complete,
+			nodes: [...complete.nodes, { id: 'gate', label: 'Gate', status: 'pending' }]
+		};
+		expect(materialGraphTopologyKey(running)).toBe(materialGraphTopologyKey(complete));
+		expect(materialGraphTopologyKey(expanded)).not.toBe(materialGraphTopologyKey(complete));
 	});
 });

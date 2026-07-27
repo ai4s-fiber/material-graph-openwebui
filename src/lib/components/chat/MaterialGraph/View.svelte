@@ -9,20 +9,37 @@
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 	import type { MaterialGraphSnapshot } from './types';
-	import { outcomeLabel } from './contract';
+	import { materialGraphTopologyKey, outcomeLabel } from './contract';
 	import { layoutWorkflow } from './layout';
 	import MaterialGraphNode from './Node.svelte';
 	export let snapshot: MaterialGraphSnapshot;
 	let selectedNodeId: string | null = null;
 	const nodes = writable<any[]>([]),
 		edges = writable<any[]>([]);
-	$: displayNodes = (snapshot?.nodes ?? []).map((node) => ({
-		...node,
-		active: node.id === snapshot?.current_node
-	}));
-	$: layout = layoutWorkflow(displayNodes, snapshot?.edges ?? []);
-	$: nodes.set(layout.nodes);
-	$: edges.set(layout.edges);
+	let positionedNodes: any[] = [];
+	let positionedEdges: any[] = [];
+	let topologyKey = '';
+	$: {
+		const displayNodes = (snapshot?.nodes ?? []).map((node) => ({
+			...node,
+			active: node.id === snapshot?.current_node
+		}));
+		const nextTopologyKey = materialGraphTopologyKey(snapshot);
+		if (nextTopologyKey !== topologyKey) {
+			const layout = layoutWorkflow(displayNodes, snapshot?.edges ?? []);
+			positionedNodes = layout.nodes;
+			positionedEdges = layout.edges;
+			topologyKey = nextTopologyKey;
+		} else {
+			const currentById = new Map(displayNodes.map((node) => [node.id, node]));
+			positionedNodes = positionedNodes.map((node) => ({
+				...node,
+				data: currentById.get(node.id) ?? node.data
+			}));
+		}
+		nodes.set(positionedNodes);
+		edges.set(positionedEdges);
+	}
 	$: selectedNode =
 		(snapshot?.nodes ?? []).find((node) => node.id === selectedNodeId) ??
 		(snapshot?.nodes ?? []).find((node) => node.id === snapshot?.current_node) ??
