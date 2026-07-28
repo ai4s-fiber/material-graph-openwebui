@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -15,10 +16,30 @@ def _text(path: Path) -> str:
     return path.read_text(encoding='utf-8')
 
 
+def _webui_name_assignments() -> list[ast.Assign | ast.AugAssign]:
+    tree = ast.parse(_text(ROOT / 'backend' / 'open_webui' / 'env.py'))
+    assignments: list[ast.Assign | ast.AugAssign] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == 'WEBUI_NAME' for target in node.targets):
+                assignments.append(node)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == 'WEBUI_NAME':
+            assignments.append(node)
+    return assignments
+
+
 def _assert_actions_are_commit_pinned(path: Path) -> None:
     uses = re.findall(r'^\s*-?\s*uses:\s+[^@\s]+@([^\s#]+)', _text(path), re.MULTILINE)
     assert uses, f'no actions found in {path.name}'
     assert all(re.fullmatch(r'[0-9a-f]{40}', revision) for revision in uses)
+
+
+def test_custom_webui_name_is_preserved_without_upstream_suffix():
+    assignments = _webui_name_assignments()
+    assert len(assignments) == 1
+    assignment = assignments[0]
+    assert isinstance(assignment, ast.Assign)
+    assert ast.unparse(assignment.value) == "os.getenv('WEBUI_NAME', 'Open WebUI')"
 
 
 def test_release_image_is_non_root_with_a_writable_data_volume() -> None:

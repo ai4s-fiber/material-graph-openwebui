@@ -465,8 +465,71 @@ def test_pipe_signs_authenticated_user_and_uses_same_origin_resume_proxy(  # noq
     assert asyncio.run(run()) == ['ok']
     assert captured['url'].endswith('/chat/stream')
     assert 'X-Material-Graph-User-Context' in captured['headers']
+    payload = json.loads(captured['content'])
+    assert payload == {
+        'message': 'design',
+        'scenario': 'custom',
+        'auto_approve': False,
+    }
     assert emitted[0]['data']['endpoint'] == '/api/v1/material-graph'
     load_material_graph_hmac_secret.cache_clear()
+
+
+def test_explicit_demo_scenario_is_forwarded_without_becoming_the_default(monkeypatch):  # noqa: C901
+    captured = []
+    monkeypatch.setattr(pipe_module, 'build_material_graph_auth_headers', lambda **_: {})
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            if False:
+                yield ''
+
+    class Stream:
+        async def __aenter__(self):
+            return Response()
+
+        async def __aexit__(self, *_):
+            return None
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def stream(self, _method, _url, **kwargs):
+            captured.append(json.loads(kwargs['content']))
+            return Stream()
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+
+    async def run(scenario):
+        return [
+            token
+            async for token in pipe.pipe(
+                {
+                    'messages': [{'role': 'user', 'content': 'run demo'}],
+                    'scenario': scenario,
+                },
+                __user__={'id': 'user-12345678', 'role': 'user'},
+            )
+        ]
+
+    for scenario in ('polyimide_design', 'pet_pa6_melt_spinning'):
+        assert asyncio.run(run(scenario)) == []
+
+    assert [payload['scenario'] for payload in captured] == [
+        'polyimide_design',
+        'pet_pa6_melt_spinning',
+    ]
 
 
 def test_terminal_run_can_be_evicted_immediately_without_changing_emitted_status():

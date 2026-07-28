@@ -92,6 +92,24 @@ def _content_sha256(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
+def _migrate_legacy_scenario_valve(value: Any) -> Any:
+    """Migrate only the retired default while preserving operator valves."""
+
+    valves = value
+    if isinstance(value, str):
+        from open_webui.utils.valves import decrypt_valves, encrypt_valves
+
+        decrypted = decrypt_valves(value)
+        if decrypted.get('scenario') != 'generic_material':
+            return value
+        valves = decrypted
+        migrated = {**valves, 'scenario': 'custom'}
+        return encrypt_valves(migrated)
+    if not isinstance(valves, dict) or valves.get('scenario') != 'generic_material':
+        return value
+    return {**valves, 'scenario': 'custom'}
+
+
 async def _default_validator(validation_id: str, content: str) -> str:
     from open_webui.utils.plugin import load_function_module_by_id
 
@@ -163,6 +181,7 @@ async def _reconcile_once(
     desired_owner = getattr(row, 'user_id', None) or owner_id
     if desired_owner == SYSTEM_OWNER_ID and owner_id != SYSTEM_OWNER_ID:
         desired_owner = owner_id
+    desired_valves = _migrate_legacy_scenario_valve(getattr(row, 'valves', None))
 
     desired = {
         'user_id': desired_owner,
@@ -170,6 +189,7 @@ async def _reconcile_once(
         'type': 'pipe',
         'content': content,
         'meta': desired_meta,
+        'valves': desired_valves,
         'is_active': True,
         'is_global': False,
     }
