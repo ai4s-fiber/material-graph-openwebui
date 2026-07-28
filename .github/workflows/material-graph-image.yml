@@ -151,41 +151,50 @@ jobs:
           retention-days: 30
 
   verify-public:
-    name: Verify public digest and keyless signature without registry credentials
+    name: Verify private digest and keyless signature with registry credentials
     needs: publish
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
+      packages: read
     env:
       IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
       SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
-      - name: Prepare an empty Docker credential boundary
+      - name: Validate immutable private image inputs
         shell: bash
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           test "$IMAGE_NAME" = "ghcr.io/$REGISTRY_REPOSITORY"
-          anonymous_docker_config="$RUNNER_TEMP/anonymous-docker"
-          mkdir -p "$anonymous_docker_config"
-          printf '{"auths":{}}\n' > "$anonymous_docker_config/config.json"
-          echo "DOCKER_CONFIG=$anonymous_docker_config" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=sha-$SOURCE_SHA" >> "$GITHUB_ENV"
 
-      - name: Verify anonymous public pull metadata and exact digest
+      - name: Log in to private GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify authenticated private pull metadata and exact digest
         shell: bash
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           repository="$REGISTRY_REPOSITORY"
           token="$(curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
+            --user "${GHCR_USERNAME}:${GHCR_TOKEN}" \
             "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull" \
             | jq -r '.token')"
           test -n "$token"
           actual_digest="$(curl --fail --silent --show-error --head \
             --retry 5 --retry-all-errors --retry-delay 3 \
+            --user "${GHCR_USERNAME}:${GHCR_TOKEN}" \
             -H "Authorization: Bearer $token" \
             -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
             "https://ghcr.io/v2/${repository}/manifests/${IMAGE_TAG}" \
@@ -193,7 +202,7 @@ jobs:
             | awk -F ': ' 'tolower($1) == "docker-content-digest" {print $2}')"
           test "$actual_digest" = "$IMAGE_DIGEST"
 
-      - name: Install Cosign without registry login
+      - name: Install Cosign after private registry login
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Verify the keyless workflow identity
