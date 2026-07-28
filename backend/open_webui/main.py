@@ -329,6 +329,10 @@ async def lifespan(app: FastAPI):
             # Disable signup since we now have an admin
             await Config.upsert({'ui.enable_signup': False})
 
+    from open_webui.utils.material_graph_pipe_bootstrap import ensure_material_graph_pipe
+
+    await ensure_material_graph_pipe()
+
     if SAFE_MODE:
         await Functions.deactivate_all_functions()
 

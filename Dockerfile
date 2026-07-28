@@ -91,9 +91,12 @@ COPY --chown=$UID:$GID --from=frontend-build /app/build /app/build
 COPY --chown=$UID:$GID --from=frontend-build /app/CHANGELOG.md /app/CHANGELOG.md
 COPY --chown=$UID:$GID --from=frontend-build /app/package.json /app/package.json
 COPY --chown=$UID:$GID backend/ /app/backend/
+COPY --chown=$UID:$GID integrations/material_graph_pipe.py /app/backend/integrations/material_graph_pipe.py
 
 RUN set -eux; \
     install -d -o "$UID" -g "$GID" -m 0750 /app/backend/data; \
+    chmod 0555 /app/backend/integrations; \
+    chmod 0444 /app/backend/integrations/material_graph_pipe.py; \
     if [ "$USE_PERMISSION_HARDENING" = "true" ]; then \
       chgrp -R 0 /app /home/app; \
       chmod -R g+rwX /app /home/app; \
@@ -109,6 +112,9 @@ RUN set -eux; \
     ! command -v rustc; \
     ! command -v apk; \
     ! "$VIRTUAL_ENV/bin/python" -m pip --version; \
+    "$VIRTUAL_ENV/bin/python" -m py_compile \
+      /app/backend/integrations/material_graph_pipe.py \
+      /app/backend/open_webui/utils/material_graph_pipe_bootstrap.py; \
     "$VIRTUAL_ENV/bin/python" -c "import sys; import aiohttp, black, fastapi, huggingface_hub, orjson, pgvector, psycopg, pydantic, sqlalchemy, typer; from lxml import etree; assert sys.version_info[:3] == (3, 14, 6); assert sys.prefix == '/opt/venv'; assert psycopg.pq.__impl__ == 'c'"
 
 ######## Final package-manager-free image ####################################
@@ -145,6 +151,7 @@ ENV ENV=prod \
     SCARF_NO_ANALYTICS=true \
     DO_NOT_TRACK=true \
     ANONYMIZED_TELEMETRY=false \
+    MATERIAL_GRAPH_PIPE_BOOTSTRAP_ENABLED=true \
     WEBUI_BUILD_VERSION=${BUILD_HASH}
 
 WORKDIR /app/backend
