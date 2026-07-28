@@ -51,7 +51,7 @@ class Pipe:
         material_graph_api_url: str = Field(default='http://material-graph-api:8000')
         material_graph_public_proxy_url: str = Field(default='/api/v1/material-graph')
         timeout_seconds: float = Field(default=180.0, ge=5.0, le=1800.0)
-        scenario: str = Field(default='generic_material')
+        scenario: str = Field(default='custom')
         run_state_max_entries: int = Field(default=512, ge=1, le=10000)
         run_state_ttl_seconds: float = Field(default=1800.0, ge=1.0, le=86400.0)
         run_state_terminal_ttl_seconds: float = Field(default=60.0, ge=0.0, le=3600.0)

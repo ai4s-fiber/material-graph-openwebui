@@ -144,6 +144,68 @@ def test_bootstrap_updates_only_managed_row_and_preserves_valves(tmp_path):
     assert session.commits == 1
 
 
+def test_bootstrap_migrates_only_the_legacy_generic_scenario_valve(tmp_path):
+    old_source = 'class Pipe:\\n    old = True\\n'
+    new_source = 'class Pipe:\\n    new = True\\n'
+    source_path = tmp_path / 'material_graph_pipe.py'
+    source_path.write_text(new_source, encoding='utf-8')
+    valves = {
+        'material_graph_api_url': 'http://operator-api:9000',
+        'scenario': 'generic_material',
+        'timeout_seconds': 420,
+    }
+    row = FakeFunction(
+        id=FUNCTION_ID,
+        user_id='admin-1',
+        name='Material Graph Studio',
+        type='pipe',
+        content=old_source,
+        meta={'manifest': {'managed_by': MANAGED_BY}},
+        valves=valves,
+        is_active=True,
+        is_global=False,
+        updated_at=1,
+        created_at=1,
+    )
+    session = FakeSession(row)
+
+    result = run_bootstrap(source_path, session)
+
+    assert result.action == 'updated'
+    assert row.valves == {
+        'material_graph_api_url': 'http://operator-api:9000',
+        'scenario': 'custom',
+        'timeout_seconds': 420,
+    }
+    assert valves['scenario'] == 'generic_material'
+
+
+def test_bootstrap_preserves_explicit_demo_scenario(tmp_path):
+    source = 'class Pipe:\\n    pass\\n'
+    source_path = tmp_path / 'material_graph_pipe.py'
+    source_path.write_text(source, encoding='utf-8')
+    valves = {'scenario': 'polyimide_design'}
+    row = FakeFunction(
+        id=FUNCTION_ID,
+        user_id='admin-1',
+        name='Material Graph Studio',
+        type='pipe',
+        content=source,
+        meta={'manifest': {'managed_by': MANAGED_BY}},
+        valves=valves,
+        is_active=True,
+        is_global=False,
+        updated_at=1,
+        created_at=1,
+    )
+    session = FakeSession(row)
+
+    result = run_bootstrap(source_path, session)
+
+    assert result.action == 'updated'
+    assert row.valves is valves
+
+
 def test_bootstrap_adopts_identical_manual_import_without_overwriting_valves(tmp_path):
     source = 'class Pipe:\\n    pass\\n'
     source_path = tmp_path / 'material_graph_pipe.py'
