@@ -39,12 +39,14 @@ jobs:
           "httpx==0.28.1"
           "fastapi==0.136.3"
           "pydantic==2.12.5"
+          "sqlalchemy==2.0.50"
           "typer==0.25.1"
           "uvicorn==0.41.0"
 
       - name: Run Material Graph integration and release contract tests
         run: >-
           python -m pytest
+          test/integrations/test_material_graph_pipe_bootstrap.py
           test/integrations/test_material_graph_pipe.py
           test/integrations/test_material_graph_hmac_contract.py
           test/integrations/test_material_graph_release_contract.py
