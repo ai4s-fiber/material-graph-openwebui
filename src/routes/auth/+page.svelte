@@ -25,9 +25,9 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import OnBoarding from '$lib/components/OnBoarding.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
-	import { redirect } from '@sveltejs/kit';
 
 	const i18n = getContext('i18n');
+	const STUDIO_NAME = 'Material Graph Studio';
 
 	let loaded = false;
 
@@ -45,7 +45,9 @@
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {
 			console.log(sessionUser);
-			toast.success($i18n.t(`You're now logged in.`));
+			if ($config?.features?.auth !== false && !($config?.features?.auth_trusted_header ?? false)) {
+				toast.success($i18n.t(`You're now logged in.`));
+			}
 			if (sessionUser.token) {
 				localStorage.token = sessionUser.token;
 			}
@@ -217,7 +219,7 @@
 
 <svelte:head>
 	<title>
-		{`${$WEBUI_NAME}`}
+		{STUDIO_NAME}
 	</title>
 </svelte:head>
 
@@ -232,7 +234,7 @@
 <div class="w-full h-screen max-h-[100dvh] text-white relative" id="auth-page">
 	<div class="w-full h-full absolute top-0 left-0 bg-white dark:bg-black"></div>
 
-	<div class="w-full absolute top-0 left-0 right-0 h-8 drag-region" />
+	<div class="w-full absolute top-0 left-0 right-0 h-8 drag-region"></div>
 
 	{#if loaded}
 		<div
@@ -240,20 +242,55 @@
 			id="auth-container"
 		>
 			<div class="w-full px-10 min-h-screen flex flex-col text-center">
-				{#if ($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false}
-					<div class=" my-auto pb-10 w-full sm:max-w-md">
-						<div
-							class="flex items-center justify-center gap-3 text-xl sm:text-2xl text-center font-medium dark:text-gray-200"
-						>
-							<div>
-								{$i18n.t('Signing in to {{WEBUI_NAME}}', { WEBUI_NAME: $WEBUI_NAME })}
+				{#if $config?.features?.auth !== true || ($config?.features.auth_trusted_header ?? false)}
+					<section
+						data-testid="studio-session-init"
+						role="status"
+						aria-live="polite"
+						class="studio-session my-auto mx-auto w-full max-w-md overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white/90 px-8 py-10 text-left shadow-[0_30px_80px_-48px_rgba(15,23,42,0.5)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/85"
+					>
+						<div class="mb-8 flex items-center gap-3">
+							<div
+								class="relative grid size-11 place-items-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-950/20 dark:bg-white dark:text-slate-950"
+								aria-hidden="true"
+							>
+								<span class="absolute size-2 rounded-full bg-emerald-400 studio-pulse"></span>
+								<span class="size-5 rounded-full border border-current/50"></span>
 							</div>
-
 							<div>
-								<Spinner className="size-5" />
+								<p
+									class="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-400 dark:text-slate-500"
+								>
+									AI4S Research Runtime
+								</p>
+								<h1
+									class="mt-0.5 text-lg font-semibold tracking-tight text-slate-950 dark:text-white"
+								>
+									{STUDIO_NAME}
+								</h1>
 							</div>
 						</div>
-					</div>
+
+						<div class="flex items-start gap-4">
+							<div class="mt-1 grid size-8 shrink-0 place-items-center">
+								<Spinner className="size-5" />
+							</div>
+							<div>
+								<p class="text-base font-medium text-slate-900 dark:text-slate-100">
+									正在建立研究会话
+								</p>
+								<p class="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
+									无需登录，正在连接材料知识图谱与多智能体运行环境。
+								</p>
+							</div>
+						</div>
+
+						<div class="mt-8 grid grid-cols-3 gap-2" aria-hidden="true">
+							<span class="studio-track studio-track-active"></span>
+							<span class="studio-track"></span>
+							<span class="studio-track"></span>
+						</div>
+					</section>
 				{:else}
 					<div class="my-auto flex flex-col justify-center items-center">
 						<div id="auth-login-card" class=" sm:max-w-md my-auto pb-10 w-full dark:text-gray-100">
@@ -624,3 +661,83 @@
 		{/if}
 	{/if}
 </div>
+
+<style>
+	:global(#auth-page) {
+		background:
+			radial-gradient(circle at 50% 42%, rgba(16, 185, 129, 0.08), transparent 32rem),
+			linear-gradient(180deg, #f8fafc 0%, #ffffff 55%, #f8fafc 100%);
+	}
+
+	:global(.dark #auth-page) {
+		background:
+			radial-gradient(circle at 50% 42%, rgba(52, 211, 153, 0.09), transparent 32rem), #020617;
+	}
+
+	.studio-session {
+		position: relative;
+	}
+
+	.studio-session::before {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+		content: '';
+		background-image:
+			linear-gradient(rgba(15, 23, 42, 0.025) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(15, 23, 42, 0.025) 1px, transparent 1px);
+		background-size: 24px 24px;
+		mask-image: linear-gradient(to bottom, black, transparent 72%);
+	}
+
+	.studio-pulse {
+		animation: studio-pulse 1.8s ease-out infinite;
+	}
+
+	.studio-track {
+		height: 2px;
+		overflow: hidden;
+		border-radius: 999px;
+		background: rgb(226 232 240);
+	}
+
+	:global(.dark) .studio-track {
+		background: rgb(30 41 59);
+	}
+
+	.studio-track-active::after {
+		display: block;
+		width: 42%;
+		height: 100%;
+		border-radius: inherit;
+		content: '';
+		background: rgb(16 185 129);
+		animation: studio-track 1.5s ease-in-out infinite;
+	}
+
+	@keyframes studio-pulse {
+		0% {
+			box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55);
+		}
+		70%,
+		100% {
+			box-shadow: 0 0 0 9px rgba(52, 211, 153, 0);
+		}
+	}
+
+	@keyframes studio-track {
+		from {
+			transform: translateX(-110%);
+		}
+		to {
+			transform: translateX(350%);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.studio-pulse,
+		.studio-track-active::after {
+			animation: none;
+		}
+	}
+</style>
