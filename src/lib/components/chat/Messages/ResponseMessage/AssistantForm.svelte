@@ -60,7 +60,8 @@
 			source: 'direct_resume',
 			epoch,
 			phase: 'begin',
-			run_id: submittedForm.run_id
+			run_id: submittedForm.run_id,
+			status: submittedForm
 		});
 		try {
 			const result = await resumeRun(
@@ -69,12 +70,14 @@
 				(event) => void onResumeEvent(directResumeEvent(event))
 			);
 			if (result.advanced) {
-				// This is the commit boundary for the complete authoritative
-				// resume stream. Await chat persistence before reporting success
-				// so refresh cannot fall back to the stale awaiting-input state.
-				await onResumeEvent(
-					directResumeEvent({ status: { ...submittedForm, resolved: true } as any })
-				);
+				// Streamed resumes are committed by the authoritative terminal
+				// event in ResponseMessage. The original AssistantForm can be
+				// destroyed as soon as a replacement review form arrives, so
+				// persistence must not depend on this component continuing.
+				if (!result.streamed)
+					await onResumeEvent(
+						directResumeEvent({ status: { ...submittedForm, resolved: true } as any })
+					);
 				submitted = true;
 			} else {
 				errors = { ...errors, ...(result.fieldErrors ?? {}) };

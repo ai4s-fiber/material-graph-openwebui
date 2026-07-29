@@ -227,7 +227,7 @@ export const latestAssistantForm = (statusHistory: any[] = []): AssistantFormDef
 
 export type MaterialGraphResumeMerge = {
 	message: any;
-	/** Persist only after the original checkpoint has been authoritatively resolved. */
+	/** Persist only after an authoritative resume boundary has resolved the original checkpoint. */
 	persist: boolean;
 };
 
@@ -239,6 +239,28 @@ export const createMaterialGraphResumeEpoch = () => {
 };
 
 const materialGraphRunId = (event: any) => String(event?.run_id ?? event?.runId ?? '').trim();
+
+const directResumeAttempt = (message: any, runId: string) =>
+	message?.materialGraphResumeAttempts?.[runId];
+
+const resolveDirectResumeForm = (history: any[], attempt: any, epoch: string) => {
+	if (!attempt || attempt.epoch !== epoch) return history;
+	return history.map((entry) => {
+		if (
+			entry?.action !== 'assistant_form' ||
+			String(entry?.run_id ?? '') !== String(attempt.run_id ?? '') ||
+			String(entry?.checkpoint_id ?? '') !== String(attempt.checkpoint_id ?? '') ||
+			String(entry?.form_id ?? '') !== String(attempt.form_id ?? '')
+		)
+			return entry;
+		return {
+			...entry,
+			resolved: true,
+			material_graph_source: 'direct_resume',
+			material_graph_epoch: epoch
+		};
+	});
+};
 
 export const shouldAcceptMaterialGraphStatus = (
 	message: any,
@@ -276,10 +298,25 @@ export const mergeMaterialGraphResumeEvent = (
 	const epoch = String(event?.epoch ?? '').trim();
 	if (source === 'direct_resume' && event?.phase === 'begin') {
 		if (!runId || !epoch) return null;
+		const submittedForm =
+			event?.status?.action === 'assistant_form'
+				? event.status
+				: latestAssistantForm(current.statusHistory ?? []);
 		next.materialGraphResumeEpochs = {
 			...(current.materialGraphResumeEpochs ?? {}),
 			[runId]: epoch
 		};
+		if (submittedForm) {
+			next.materialGraphResumeAttempts = {
+				...(current.materialGraphResumeAttempts ?? {}),
+				[runId]: {
+					run_id: runId,
+					epoch,
+					checkpoint_id: submittedForm.checkpoint_id ?? '',
+					form_id: submittedForm.form_id ?? ''
+				}
+			};
+		}
 		history.messages[messageId] = next;
 		return { message: next, persist: false };
 	}
@@ -302,10 +339,28 @@ export const mergeMaterialGraphResumeEvent = (
 				}
 			: event?.status;
 	if (status) next.statusHistory = appendMaterialGraphStatus(current.statusHistory ?? [], status);
+	const eventKind = String(
+		status?.event_type ?? status?.type ?? event?.raw?.event_type ?? event?.raw?.type ?? ''
+	)
+		.trim()
+		.toLowerCase()
+		.replaceAll('-', '_');
+	const authoritativeBoundary =
+		source === 'direct_resume' &&
+		(['terminal', 'done'].includes(eventKind) || status?.done === true);
+	if (authoritativeBoundary) {
+		next.statusHistory = resolveDirectResumeForm(
+			next.statusHistory ?? current.statusHistory ?? [],
+			directResumeAttempt(current, runId),
+			epoch
+		);
+	}
 
 	history.messages[messageId] = next;
 	return {
 		message: next,
-		persist: Boolean(status?.action === 'assistant_form' && status.resolved === true)
+		persist:
+			authoritativeBoundary ||
+			Boolean(status?.action === 'assistant_form' && status.resolved === true)
 	};
 };

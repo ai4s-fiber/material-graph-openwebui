@@ -476,7 +476,8 @@ describe('resume adapter', () => {
 			source: 'direct_resume',
 			phase: 'begin',
 			run_id: 'run-1',
-			epoch
+			epoch,
+			status: intakeForm
 		});
 
 		const mergeResults: any[] = [];
@@ -496,14 +497,6 @@ describe('resume adapter', () => {
 			},
 			fetcher
 		);
-		const resolved = mergeMaterialGraphResumeEvent(history, 'assistant', {
-			source: 'direct_resume',
-			phase: 'event',
-			run_id: 'run-1',
-			epoch,
-			status: { ...intakeForm, resolved: true }
-		});
-
 		expect(result).toEqual(
 			expect.objectContaining({
 				authoritative: true,
@@ -512,11 +505,21 @@ describe('resume adapter', () => {
 				current_node: 'human_review'
 			})
 		);
-		expect(mergeResults.some((merge) => merge?.persist)).toBe(false);
-		expect(resolved?.persist).toBe(true);
+		const terminalMerge = mergeResults.find((merge) => merge?.persist);
+		expect(terminalMerge).toBeTruthy();
+		expect(
+			history.messages.assistant.statusHistory.find(
+				(status: any) =>
+					status.action === 'assistant_form' &&
+					status.form_id === intakeForm.form_id &&
+					status.checkpoint_id === intakeForm.checkpoint_id
+			)
+		).toEqual(expect.objectContaining({ resolved: true }));
 		const saveMessage = vi.fn().mockResolvedValue(undefined);
 		const settled = vi.fn().mockResolvedValue(undefined);
-		const persisted = resolved?.persist
+		// Simulate the original AssistantForm being destroyed immediately after
+		// the replacement review form renders: no post-resume callback runs.
+		const persisted = terminalMerge?.persist
 			? await persistMaterialGraphResume({
 					history,
 					messageId: 'assistant',
