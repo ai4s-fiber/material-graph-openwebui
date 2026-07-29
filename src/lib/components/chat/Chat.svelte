@@ -119,6 +119,7 @@
 	import Image from '../common/Image.svelte';
 
 	export let chatIdProp = '';
+	export let studioMode = true;
 
 	let loading = true;
 
@@ -405,6 +406,18 @@
 		settingDefaults = true;
 
 		try {
+			if (studioMode) {
+				selectedToolIds = [];
+				selectedSkillIds = [];
+				selectedFilterIds = [];
+				pendingOAuthTools = [];
+				webSearchEnabled = false;
+				imageGenerationEnabled = false;
+				codeInterpreterEnabled = false;
+				selectedTerminalId.set(null);
+				return;
+			}
+
 			if (!$tools) {
 				tools.set(await getTools(localStorage.token));
 			}
@@ -1482,25 +1495,25 @@
 			await uploadWeb($page.url.searchParams.get('load-url'));
 		}
 
-		if ($page.url.searchParams.get('web-search') === 'true') {
+		if (!studioMode && $page.url.searchParams.get('web-search') === 'true') {
 			webSearchEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('image-generation') === 'true') {
+		if (!studioMode && $page.url.searchParams.get('image-generation') === 'true') {
 			imageGenerationEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('code-interpreter') === 'true') {
+		if (!studioMode && $page.url.searchParams.get('code-interpreter') === 'true') {
 			codeInterpreterEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('tools')) {
+		if (!studioMode && $page.url.searchParams.get('tools')) {
 			selectedToolIds = $page.url.searchParams
 				.get('tools')
 				?.split(',')
 				.map((id) => id.trim())
 				.filter((id) => id);
-		} else if ($page.url.searchParams.get('tool-ids')) {
+		} else if (!studioMode && $page.url.searchParams.get('tool-ids')) {
 			selectedToolIds = $page.url.searchParams
 				.get('tool-ids')
 				?.split(',')
@@ -1510,14 +1523,14 @@
 
 		// Restore tool selection after OAuth redirect
 		const pendingToolId = sessionStorage.getItem('pendingOAuthToolId');
-		if (pendingToolId) {
+		if (!studioMode && pendingToolId) {
 			sessionStorage.removeItem('pendingOAuthToolId');
 			if (!selectedToolIds.includes(pendingToolId)) {
 				selectedToolIds = [...selectedToolIds, pendingToolId];
 			}
 		}
 
-		if ($page.url.searchParams.get('call') === 'true') {
+		if (!studioMode && $page.url.searchParams.get('call') === 'true') {
 			showCallOverlay.set(true);
 			showControls.set(true);
 		}
@@ -1527,7 +1540,7 @@
 			const event = $desktopEvent;
 			desktopEvent.set(null);
 
-			if (event.type === 'call') {
+			if (!studioMode && event.type === 'call') {
 				// Defer to next macrotask so the call overlay isn't clobbered by
 				// showControlsSubscribe's initial callback (value=false → set(false))
 				// which runs as a pending microtask after this function.
@@ -2556,18 +2569,20 @@
 
 				files: (files?.length ?? 0) > 0 ? files : undefined,
 
-				filter_ids: selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
-				tool_ids: toolIds.length > 0 ? toolIds : undefined,
-				skill_ids: skillIds.length > 0 ? skillIds : undefined,
-				terminal_id: terminalEnabled ? (activeTerminalId ?? undefined) : undefined,
-				tool_servers: [
-					...($toolServers ?? []).filter(
-						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
-					),
-					// Direct terminal servers — always included when enabled (not routed through selectedToolIds)
-					...($terminalServers ?? []).filter((t) => !t.id)
-				],
-				features: getFeatures(),
+				filter_ids: !studioMode && selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
+				tool_ids: !studioMode && toolIds.length > 0 ? toolIds : undefined,
+				skill_ids: !studioMode && skillIds.length > 0 ? skillIds : undefined,
+				terminal_id: !studioMode && terminalEnabled ? (activeTerminalId ?? undefined) : undefined,
+				tool_servers: studioMode
+					? []
+					: [
+							...($toolServers ?? []).filter(
+								(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
+							),
+							// Direct terminal servers — always included when enabled (not routed through selectedToolIds)
+							...($terminalServers ?? []).filter((t) => !t.id)
+						],
+				features: studioMode ? {} : getFeatures(),
 				variables: {
 					...getPromptVariables(
 						$user?.name,
@@ -3190,7 +3205,7 @@
 						title={$chatTitle}
 						bind:selectedModels
 						showModelSelector={false}
-						studioMode={true}
+						{studioMode}
 						shareEnabled={!!history.currentId}
 						{initNewChat}
 						scrollToTop={!isNearTop ? scrollToTop : null}
@@ -3288,6 +3303,7 @@
 									<MessageInput
 										bind:this={messageInput}
 										{history}
+										{studioMode}
 										{taskIds}
 										{selectedModels}
 										bind:files
