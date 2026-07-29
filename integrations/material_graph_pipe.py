@@ -47,6 +47,7 @@ FAILURE = {
 TITLE_GENERATION = 'title_generation'
 TAGS_GENERATION = 'tags_generation'
 FOLLOW_UP_GENERATION = 'follow_up_generation'
+KNOWLEDGE_SIGNAL = 'knowledge_signal'
 SAFE_BACKGROUND_TASKS = {
     TITLE_GENERATION,
     TAGS_GENERATION,
@@ -435,6 +436,17 @@ class Pipe:
         action = data.get('action')
         kind = str(data.get('event_type') or data.get('kind') or name).lower()
         run = data.get('run_id') or data.get('runId')
+        if kind == KNOWLEDGE_SIGNAL:
+            if action != 'material_graph' or not run:
+                return None
+            return {
+                **data,
+                'action': 'material_graph_knowledge',
+                'run_id': str(run),
+                'type': data.get('type') or name or KNOWLEDGE_SIGNAL,
+                'event_type': data.get('event_type') or KNOWLEDGE_SIGNAL,
+                'contract_version': (version or data.get('contract_version') or 'legacy'),
+            }
         if action == 'assistant_form' or kind in FORM:
             form = data.get('form') if isinstance(data.get('form'), dict) else data
             return {

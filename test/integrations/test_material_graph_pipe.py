@@ -145,6 +145,123 @@ def test_full_workflow_survives_partial_events():
     assert graph['logs'][0]['message'] == 'checkpoint persisted'
 
 
+def test_knowledge_signal_is_forwarded_without_mutating_execution_graph():
+    pipe = Pipe()
+    workflow_nodes = [{'id': f'node-{index}', 'label': f'Node {index}', 'status': 'pending'} for index in range(15)]
+    workflow_edges = [{'source': f'node-{index}', 'target': f'node-{index + 1}'} for index in range(14)] + [
+        {'source': f'node-{index}', 'target': f'node-{index + 2}'} for index in range(10)
+    ]
+    asyncio.run(
+        forward(
+            pipe,
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'graph_snapshot',
+                'event_type': 'graph_snapshot',
+                'action': 'material_graph',
+                'run_id': 'run-knowledge',
+                'graph_version': 1,
+                'nodes': workflow_nodes,
+                'edges': workflow_edges,
+                'logs': [],
+            },
+        )
+    )
+    knowledge_nodes = [
+        {
+            'id': 'kg-polyimide',
+            'label': '聚酰亚胺',
+            'agent_roles': ['material'],
+            'hit': True,
+        },
+        {
+            'id': 'kg-tg',
+            'label': '玻璃化转变温度',
+            'agent_roles': ['performance_testing'],
+            'hit': True,
+        },
+    ]
+    knowledge_edges = [
+        {
+            'id': 'kg-edge-1',
+            'source': 'kg-polyimide',
+            'target': 'kg-tg',
+            'relation': 'has_property',
+        }
+    ]
+    pulse = [
+        {
+            'edge_id': 'kg-edge-1',
+            'source': 'kg-polyimide',
+            'target': 'kg-tg',
+        }
+    ]
+    stats = {
+        'total_nodes': 2,
+        'total_edges': 1,
+        'visible_nodes': 2,
+        'visible_edges': 1,
+        'truncated': False,
+    }
+
+    _, events = asyncio.run(
+        forward(
+            pipe,
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'knowledge_signal',
+                'event_type': 'knowledge_signal',
+                'action': 'material_graph',
+                'signal_version': 1,
+                'run_id': 'run-knowledge',
+                'phase': 'agent_execution',
+                'workflow_node': 'material_design',
+                'graph_id': 'task-graph-run-knowledge',
+                'graph_version_label': 'V2',
+                'nodes': knowledge_nodes,
+                'edges': knowledge_edges,
+                'pulse': pulse,
+                'stats': stats,
+                'active_agents': ['material', 'performance_testing'],
+            },
+        )
+    )
+
+    signal = events[0]['data']
+    assert signal['action'] == 'material_graph_knowledge'
+    assert signal['run_id'] == 'run-knowledge'
+    assert signal['type'] == 'knowledge_signal'
+    assert signal['event_type'] == 'knowledge_signal'
+    assert signal['signal_version'] == 1
+    assert signal['phase'] == 'agent_execution'
+    assert signal['workflow_node'] == 'material_design'
+    assert signal['graph_id'] == 'task-graph-run-knowledge'
+    assert signal['graph_version_label'] == 'V2'
+    assert signal['nodes'] == knowledge_nodes
+    assert signal['edges'] == knowledge_edges
+    assert signal['pulse'] == pulse
+    assert signal['stats'] == stats
+    assert signal['active_agents'] == ['material', 'performance_testing']
+    assert len(pipe._runs['run-knowledge']['nodes']) == 15
+    assert len(pipe._runs['run-knowledge']['edges']) == 24
+    assert pipe._runs['run-knowledge']['nodes'] == workflow_nodes
+    assert pipe._runs['run-knowledge']['edges'] == workflow_edges
+
+    tokens, no_signal_events = asyncio.run(
+        forward(
+            pipe,
+            {
+                'type': 'assistant_delta',
+                'event_type': 'assistant_delta',
+                'run_id': 'run-knowledge',
+                'delta': '继续执行',
+            },
+        )
+    )
+    assert tokens == ['继续执行']
+    assert no_signal_events == []
+
+
 def test_token_and_non_success_terminal():
     pipe = Pipe()
     tokens, _ = asyncio.run(
