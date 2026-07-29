@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mergeMaterialGraphResumeEvent, reduceMaterialGraph } from '../contract';
+import {
+	latestAssistantForm,
+	latestMaterialGraph,
+	mergeMaterialGraphResumeEvent,
+	reduceMaterialGraph
+} from '../contract';
 import { latestKnowledgeGraph } from '../knowledgeGraph';
 import { resumeKey, resumeRun } from '../resume';
 const form: any = {
@@ -352,5 +357,292 @@ describe('resume adapter', () => {
 
 		expect(events.map((event) => event.token).filter(Boolean)).toEqual([summary]);
 		expect(events.some((event) => event.replaceContent)).toBe(false);
+	});
+	it('persists the complete PI review checkpoint and reconstructs it after a reload', async () => {
+		const finalSummary = 'PI 高 Tg 任务已完成一轮 Graph 执行，候选方案等待专家审核。';
+		const workflowNodes = Array.from({ length: 15 }, (_, index) => ({
+			id: index === 14 ? 'human_review' : `workflow-${index}`,
+			label: index === 14 ? '专家审核' : `Workflow ${index}`,
+			status: index === 14 ? 'awaiting_review' : 'complete'
+		}));
+		const workflowEdges = Array.from({ length: 24 }, (_, index) => ({
+			source: workflowNodes[index % workflowNodes.length].id,
+			target: workflowNodes[(index + 1) % workflowNodes.length].id
+		}));
+		const knowledgeSignal = {
+			action: 'material_graph',
+			type: 'knowledge_signal',
+			event_type: 'knowledge_signal',
+			run_id: 'run-1',
+			phase: 'agent_execution',
+			active_agents: ['material', 'evaluation', 'experiment_design'],
+			nodes: [
+				{ id: 'kg-pi', label: '聚酰亚胺', agent_roles: ['material'], retrieved: true },
+				{
+					id: 'kg-high-tg',
+					label: '高玻璃化转变温度',
+					agent_roles: ['evaluation'],
+					retrieved: true
+				}
+			],
+			edges: [
+				{
+					id: 'kg-targets',
+					source: 'kg-pi',
+					target: 'kg-high-tg',
+					relation: 'targets',
+					retrieved: true
+				}
+			],
+			pulse: [{ edge_id: 'kg-targets', source: 'kg-pi', target: 'kg-high-tg' }],
+			stats: { total_nodes: 2, total_edges: 1, visible_nodes: 2, visible_edges: 1 }
+		};
+		const reviewForm = {
+			action: 'assistant_form',
+			run_id: 'run-1',
+			form_id: 'human-review:run-1',
+			checkpoint_id: 'cp-review',
+			status: 'awaiting_review',
+			fields: [{ name: 'decision', type: 'select', options: ['approve', 'reject'] }]
+		};
+		const frames = [
+			{
+				type: 'assistant_message',
+				content_mode: 'final',
+				run_id: 'run-1',
+				content: finalSummary
+			},
+			{
+				action: 'material_graph',
+				event_type: 'graph_snapshot',
+				run_id: 'run-1',
+				graph_version: 12,
+				status: 'running',
+				current_node: 'agent_aggregation',
+				nodes: workflowNodes,
+				edges: workflowEdges
+			},
+			knowledgeSignal,
+			{ type: 'form', run_id: 'run-1', form: reviewForm },
+			{
+				action: 'material_graph',
+				event_type: 'terminal',
+				run_id: 'run-1',
+				graph_version: 13,
+				status: 'awaiting_review',
+				current_node: 'human_review',
+				done: true
+			}
+		];
+		const fetcher = vi
+			.fn()
+			.mockResolvedValue(
+				response(
+					frames.map((frame) => `data: ${JSON.stringify(frame)}`).join('\n\n') + '\n\n',
+					200,
+					'text/event-stream'
+				)
+			);
+		const intakeForm = {
+			...form,
+			status: 'awaiting_input',
+			current_node: 'task_structure',
+			graph_version: 1
+		};
+		const history: any = {
+			messages: {
+				assistant: {
+					id: 'assistant',
+					content: '未指定材料体系，0 条证据。',
+					statusHistory: [
+						{
+							action: 'material_graph',
+							event_type: 'graph_snapshot',
+							run_id: 'run-1',
+							graph_version: 1,
+							status: 'awaiting_input',
+							current_node: 'task_structure',
+							nodes: workflowNodes,
+							edges: workflowEdges
+						},
+						intakeForm
+					]
+				}
+			}
+		};
+		const epoch = 'pi-review-resume';
+		mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'begin',
+			run_id: 'run-1',
+			epoch
+		});
+
+		const mergeResults: any[] = [];
+		const result = await resumeRun(
+			intakeForm,
+			{ material_family: 'PI', objective: '高 Tg' },
+			(event) => {
+				mergeResults.push(
+					mergeMaterialGraphResumeEvent(history, 'assistant', {
+						...event,
+						source: 'direct_resume',
+						phase: 'event',
+						run_id: 'run-1',
+						epoch
+					})
+				);
+			},
+			fetcher
+		);
+		const resolved = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'event',
+			run_id: 'run-1',
+			epoch,
+			status: { ...intakeForm, resolved: true }
+		});
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				authoritative: true,
+				advanced: true,
+				status: 'awaiting_review',
+				current_node: 'human_review'
+			})
+		);
+		expect(mergeResults.some((merge) => merge?.persist)).toBe(false);
+		expect(resolved?.persist).toBe(true);
+
+		// Simulate the canonical chat payload being serialized by Open WebUI and
+		// reconstructed after a full browser refresh.
+		const reloaded = {
+			messages: {
+				assistant: JSON.parse(JSON.stringify(history.messages.assistant))
+			}
+		};
+		const restoredMessage = reloaded.messages.assistant;
+		const restoredGraph = latestMaterialGraph(reloaded);
+		const restoredForm = latestAssistantForm(restoredMessage.statusHistory);
+		const restoredKnowledge = latestKnowledgeGraph(reloaded);
+
+		expect(restoredMessage.content).toBe(finalSummary);
+		expect(restoredMessage.content).not.toContain('未指定');
+		expect(restoredGraph).toEqual(
+			expect.objectContaining({
+				run_id: 'run-1',
+				status: 'awaiting_review',
+				current_node: 'human_review'
+			})
+		);
+		expect(restoredGraph?.nodes).toHaveLength(15);
+		expect(restoredGraph?.edges).toHaveLength(24);
+		expect(restoredForm).toEqual(
+			expect.objectContaining({
+				run_id: 'run-1',
+				form_id: 'human-review:run-1',
+				checkpoint_id: 'cp-review',
+				status: 'awaiting_review'
+			})
+		);
+		expect(restoredKnowledge).toEqual(
+			expect.objectContaining({
+				runId: 'run-1',
+				activeAgents: ['material', 'evaluation', 'experiment_design'],
+				pulse: knowledgeSignal.pulse
+			})
+		);
+		expect(restoredKnowledge?.nodes.map((node) => node.id)).toEqual(['kg-pi', 'kg-high-tg']);
+		expect(restoredKnowledge?.nodes.map((node) => node.agentViews)).toEqual([
+			['material'],
+			['evaluation']
+		]);
+		expect(restoredKnowledge?.edges.map((edge) => [edge.id, edge.source, edge.target])).toEqual([
+			['kg-targets', 'kg-pi', 'kg-high-tg']
+		]);
+	});
+	it('does not resolve or persist the intake form when a resume stream ends mid-run', async () => {
+		const runningNodes = Array.from({ length: 15 }, (_, index) => ({
+			id: `workflow-${index}`,
+			label: `Workflow ${index}`
+		}));
+		const runningEdges = Array.from({ length: 24 }, (_, index) => ({
+			source: runningNodes[index % runningNodes.length].id,
+			target: runningNodes[(index + 1) % runningNodes.length].id
+		}));
+		const fetcher = vi.fn().mockResolvedValue(
+			response(
+				`data: ${JSON.stringify({
+					action: 'material_graph',
+					event_type: 'graph_snapshot',
+					run_id: 'run-1',
+					graph_version: 2,
+					status: 'running',
+					current_node: 'task_subgraph',
+					nodes: runningNodes,
+					edges: runningEdges
+				})}\n\n`,
+				200,
+				'text/event-stream'
+			)
+		);
+		const intakeForm = {
+			...form,
+			status: 'awaiting_input',
+			current_node: 'task_structure',
+			graph_version: 1
+		};
+		const history: any = {
+			messages: {
+				assistant: {
+					id: 'assistant',
+					content: '未指定材料体系，0 条证据。',
+					statusHistory: [intakeForm]
+				}
+			}
+		};
+		const epoch = 'interrupted-resume';
+		mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'begin',
+			run_id: 'run-1',
+			epoch
+		});
+		const mergeResults: any[] = [];
+
+		await expect(
+			resumeRun(
+				intakeForm,
+				{ material_family: 'PI', objective: '高 Tg' },
+				(event) => {
+					mergeResults.push(
+						mergeMaterialGraphResumeEvent(history, 'assistant', {
+							...event,
+							source: 'direct_resume',
+							phase: 'event',
+							run_id: 'run-1',
+							epoch
+						})
+					);
+				},
+				fetcher
+			)
+		).rejects.toThrow('意外结束');
+
+		const reloaded = {
+			messages: {
+				assistant: JSON.parse(JSON.stringify(history.messages.assistant))
+			}
+		};
+		expect(mergeResults.some((merge) => merge?.persist)).toBe(false);
+		expect(latestAssistantForm(reloaded.messages.assistant.statusHistory)).toEqual(
+			expect.objectContaining({
+				run_id: 'run-1',
+				form_id: 'f',
+				checkpoint_id: 'cp-1',
+				status: 'awaiting_input'
+			})
+		);
+		expect(reloaded.messages.assistant.content).toBe('未指定材料体系，0 条证据。');
 	});
 });
