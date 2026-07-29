@@ -6,6 +6,7 @@ import {
 	mergeMaterialGraphResumeEvent,
 	materialGraphTopologyKey,
 	reduceMaterialGraph,
+	shouldAcceptMaterialGraphPipeContent,
 	shouldAcceptMaterialGraphStatus,
 	outcomeLabel
 } from '../contract';
@@ -160,6 +161,7 @@ describe('Material Graph contracts', () => {
 		expect(shouldAcceptMaterialGraphStatus(history.messages.assistant, oldForm, 'pipe')).toBe(
 			false
 		);
+		expect(shouldAcceptMaterialGraphPipeContent(history.messages.assistant)).toBe(false);
 
 		const resolvedMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
 			source: 'direct_resume',

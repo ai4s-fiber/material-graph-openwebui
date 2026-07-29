@@ -276,6 +276,14 @@ export const shouldAcceptMaterialGraphStatus = (
 };
 
 /**
+ * Once an assistant message has entered a direct checkpoint resume, its
+ * original Pipe stream is stale. Pipe content events do not carry the resume
+ * epoch, so accepting them would overwrite the authoritative resumed summary.
+ */
+export const shouldAcceptMaterialGraphPipeContent = (message: any) =>
+	Object.keys(message?.materialGraphResumeEpochs ?? {}).length === 0;
+
+/**
  * Merge resume-stream events into the message owned by the chat history.
  *
  * ResponseMessage keeps a local clone for rendering, but Chat.svelte treats

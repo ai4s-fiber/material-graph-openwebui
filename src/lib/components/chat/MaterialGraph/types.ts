@@ -234,6 +234,7 @@ export {
 	mergeMaterialGraphResumeEvent,
 	latestMaterialGraph,
 	materialGraphTopologyKey,
+	shouldAcceptMaterialGraphPipeContent,
 	shouldAcceptMaterialGraphStatus
 } from './contract';
 export { latestKnowledgeGraph, normalizeKnowledgeGraph } from './knowledgeGraph';

@@ -71,6 +71,7 @@
 	import { getOutputText } from './Messages/structuredOutput';
 	import {
 		appendMaterialGraphStatus,
+		shouldAcceptMaterialGraphPipeContent,
 		shouldAcceptMaterialGraphStatus
 	} from './MaterialGraph/types';
 
@@ -648,7 +649,7 @@
 							await loadChat();
 						}
 					}
-				} else if (type === 'chat:completion') {
+				} else if (type === 'chat:completion' && shouldAcceptMaterialGraphPipeContent(message)) {
 					chatCompletionEventHandler(data, message, event.chat_id);
 				} else if (type === 'chat:tasks:cancel') {
 					dismissContextCompactionToast();
@@ -662,9 +663,15 @@
 					} else {
 						message.done = true;
 					}
-				} else if (type === 'chat:message:delta' || type === 'message') {
+				} else if (
+					(type === 'chat:message:delta' || type === 'message') &&
+					shouldAcceptMaterialGraphPipeContent(message)
+				) {
 					message.content += data.content;
-				} else if (type === 'chat:message' || type === 'replace') {
+				} else if (
+					(type === 'chat:message' || type === 'replace') &&
+					shouldAcceptMaterialGraphPipeContent(message)
+				) {
 					message.content = data.content;
 				} else if (type === 'chat:message:files' || type === 'files') {
 					message.files = data.files;
@@ -689,7 +696,7 @@
 					if (autoScroll) {
 						scrollToBottom('smooth');
 					}
-				} else if (type === 'chat:outlet') {
+				} else if (type === 'chat:outlet' && shouldAcceptMaterialGraphPipeContent(message)) {
 					// Outlet filter ran on backend — sync in-memory state
 					const outletMessages = data.messages ?? [];
 					for (const msg of outletMessages) {
