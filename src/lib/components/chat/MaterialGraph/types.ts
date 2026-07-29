@@ -59,6 +59,7 @@ export interface MaterialGraphSnapshot {
 	workflow?: WorkflowDefinition;
 	workflow_definition?: WorkflowDefinition;
 	checkpoint_id?: string;
+	form_id?: string;
 	current_node?: string | null;
 	route_signal?: string | null;
 	nodes: MaterialGraphNode[];
@@ -73,6 +74,84 @@ export interface MaterialGraphSnapshot {
 	retryable?: boolean;
 	retry_after_seconds?: number;
 }
+
+export type MaterialGraphKnowledgeAgent =
+	| 'material'
+	| 'process'
+	| 'performance_testing'
+	| 'safety_quality'
+	| 'evaluation'
+	| 'experiment_design';
+
+/**
+ * `shared_retrieval` is deliberately not an Agent. It is the neutral staging
+ * area used before the backend has supplied a real Agent View membership. That
+ * lets the UI show an early, real retrieval without attributing it to an Agent.
+ */
+export type MaterialGraphKnowledgeZone = MaterialGraphKnowledgeAgent | 'shared_retrieval';
+
+export interface MaterialGraphKnowledgeNode {
+	id: string;
+	label: string;
+	agentView: MaterialGraphKnowledgeZone;
+	agentViews?: MaterialGraphKnowledgeAgent[];
+	description?: string;
+	hit?: boolean;
+	active?: boolean;
+	metadata?: Record<string, unknown>;
+}
+
+export interface MaterialGraphKnowledgeEdge {
+	id: string;
+	source: string;
+	target: string;
+	relation?: string;
+	agentViews?: MaterialGraphKnowledgeAgent[];
+	active?: boolean;
+	pulse?: boolean;
+}
+
+export interface MaterialGraphKnowledgeGraph {
+	runId: string;
+	phase: string;
+	workflowNode?: string;
+	graphId?: string;
+	graphVersionLabel?: string;
+	activeAgents: string[];
+	nodes: MaterialGraphKnowledgeNode[];
+	edges: MaterialGraphKnowledgeEdge[];
+	pulse: Array<Record<string, any>>;
+	receivedNodeCount: number;
+	receivedEdgeCount: number;
+	omittedNodeCount: number;
+	omittedEdgeCount: number;
+	truncated: boolean;
+	updatedAt?: string;
+}
+
+/**
+ * Raw, evidence-backed knowledge projection carried over SSE.
+ *
+ * It deliberately uses a distinct action so workflow reducers cannot mistake
+ * recalled knowledge nodes for execution-graph nodes.
+ */
+export interface MaterialGraphKnowledgeSignal {
+	action: 'material_graph_knowledge';
+	type?: 'knowledge_signal';
+	event_type: 'knowledge_signal';
+	run_id: string;
+	phase?: string;
+	workflow_node?: string;
+	graph_id?: string;
+	graph_version_label?: string;
+	active_agents?: string[];
+	nodes?: Array<Record<string, unknown>>;
+	edges?: Array<Record<string, unknown>>;
+	pulse?: Array<Record<string, unknown>>;
+	stats?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
 export interface AssistantFormField {
 	name?: string;
 	key?: string;
@@ -96,6 +175,14 @@ export interface AssistantFormDefinition {
 	run_id: string;
 	contract_version?: string;
 	checkpoint_id?: string;
+	/** Authoritative status carried by a form event, when available. */
+	status?: MaterialGraphNodeStatus | string;
+	/** Current graph node/checkpoint metadata mirrored into the form event. */
+	current_node?: string | null;
+	graph_version?: number;
+	outcome?: string;
+	done?: boolean;
+	resolved?: boolean;
 	title?: string;
 	description?: string;
 	fields?: AssistantFormField[];
@@ -108,12 +195,46 @@ export interface AssistantFormDefinition {
 }
 export type ResumeEvent = {
 	token?: string;
-	status?: MaterialGraphSnapshot | AssistantFormDefinition;
+	/** Replace the stale awaiting-input summary with an authoritative final message. */
+	replaceContent?: boolean;
+	status?: MaterialGraphSnapshot | MaterialGraphKnowledgeSignal | AssistantFormDefinition;
 	raw?: unknown;
+	/** Direct-resume events outrank the older Pipe stream for the same run. */
+	source?: 'direct_resume';
+	/** A unique client epoch fences stale events from earlier resume attempts. */
+	epoch?: string;
+	phase?: 'begin' | 'event';
+	run_id?: string;
 };
+
+/**
+ * Result of a resume request. `advanced` is deliberately separate from the
+ * HTTP/SSE transport succeeding: a stream can be healthy while the graph is
+ * still waiting for the same input checkpoint.
+ */
+export interface ResumeResult {
+	streamed: boolean;
+	authoritative: boolean;
+	advanced: boolean;
+	awaitingInput: boolean;
+	terminal: boolean;
+	status?: string;
+	outcome?: string;
+	current_node?: string | null;
+	graph_version?: number;
+	checkpoint_id?: string | null;
+	form_id?: string | null;
+	fieldErrors?: Record<string, string>;
+	message?: string;
+}
 export {
 	appendMaterialGraphStatus,
+	createMaterialGraphResumeEpoch,
 	latestAssistantForm,
+	mergeMaterialGraphResumeEvent,
 	latestMaterialGraph,
-	materialGraphTopologyKey
+	materialGraphTopologyKey,
+	shouldAcceptMaterialGraphPipeContent,
+	shouldAcceptMaterialGraphStatus
 } from './contract';
+export { latestKnowledgeGraph, normalizeKnowledgeGraph } from './knowledgeGraph';

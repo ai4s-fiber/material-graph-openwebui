@@ -17,11 +17,13 @@ export const normalizeFields = (form: AssistantFormDefinition): AssistantFormFie
 					? 'select'
 					: ['number', 'integer'].includes(raw.type)
 						? 'number'
-						: raw.type === 'boolean'
-							? 'boolean'
-							: raw.format === 'multiline' || raw.format === 'textarea'
-								? 'textarea'
-								: 'text',
+						: raw.type === 'object'
+							? 'object'
+							: raw.type === 'boolean'
+								? 'boolean'
+								: raw.format === 'multiline' || raw.format === 'textarea'
+									? 'textarea'
+									: 'text',
 		default: raw.default,
 		minimum: raw.minimum,
 		maximum: raw.maximum,
@@ -42,11 +44,13 @@ export const initialValues = (form: AssistantFormDefinition, fields = normalizeF
 	Object.fromEntries(
 		fields.map((field) => {
 			const key = fieldKey(field);
+			const value =
+				form.defaults?.[key] ??
+				field.default ??
+				(field.type === 'boolean' ? false : field.type === 'multiselect' ? [] : '');
 			return [
 				key,
-				form.defaults?.[key] ??
-					field.default ??
-					(field.type === 'boolean' ? false : field.type === 'multiselect' ? [] : '')
+				field.type === 'object' && value !== '' ? JSON.stringify(value, null, 2) : value
 			];
 		})
 	);
@@ -60,7 +64,14 @@ export const validateValues = (fields: AssistantFormField[], values: Record<stri
 		if (field.required && empty) errors[key] = `${label}为必填项`;
 		else if (!empty && field.type === 'number' && !Number.isFinite(Number(value)))
 			errors[key] = `${label}必须是数字`;
-		else if (!empty && field.minimum != null && Number(value) < field.minimum)
+		else if (!empty && field.type === 'object') {
+			try {
+				const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+				if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+			} catch {
+				errors[key] = `${label}必须是有效的 JSON 对象`;
+			}
+		} else if (!empty && field.minimum != null && Number(value) < field.minimum)
 			errors[key] = `${label}不能小于${field.minimum}`;
 		else if (!empty && field.maximum != null && Number(value) > field.maximum)
 			errors[key] = `${label}不能大于${field.maximum}`;
@@ -76,6 +87,13 @@ export const serializeValues = (fields: AssistantFormField[], values: Record<str
 		fields.map((field) => {
 			const key = fieldKey(field),
 				value = values[key];
-			return [key, field.type === 'number' && value !== '' ? Number(value) : value];
+			return [
+				key,
+				field.type === 'number' && value !== ''
+					? Number(value)
+					: field.type === 'object' && typeof value === 'string' && value !== ''
+						? JSON.parse(value)
+						: value
+			];
 		})
 	);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -8,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[2]
 IMAGE_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-image.yml'
 CI_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-ci.yml'
 FRONTEND_WORKFLOW = ROOT / '.github' / 'workflows' / 'frontend.yaml'
+VITE_CONFIG = ROOT / 'vite.config.ts'
+PYODIDE_PREP = ROOT / 'scripts' / 'prepare-pyodide.js'
+PACKAGE_JSON = ROOT / 'package.json'
 RELEASE_IMAGE = 'ghcr.io/ai4s-fiber/material-graph-openwebui-release'
 RELEASE_REPOSITORY = 'ai4s-fiber/material-graph-openwebui-release'
 
@@ -173,6 +177,29 @@ def test_frontend_format_gate_is_read_only_and_project_scoped() -> None:
     assert 'npm run i18n:parse' not in workflow
     assert 'git diff --exit-code' not in workflow
     assert 'npm run build' in workflow
+
+
+def test_production_frontend_source_maps_are_opt_in() -> None:
+    vite_config = _text(VITE_CONFIG)
+
+    assert "sourcemap: process.env.GENERATE_SOURCEMAP === 'true'" in vite_config
+    assert 'sourcemap: true' not in vite_config
+
+
+def test_pyodide_assets_do_not_publish_third_party_source_maps() -> None:
+    preparation = _text(PYODIDE_PREP)
+
+    assert "if (entry.endsWith('.map')) continue;" in preparation
+    assert 'const SOURCE_MAP_DIRECTIVE =' in preparation
+    assert r'\/\/[#@]\s*sourceMappingURL=' in preparation
+    assert "entry.endsWith('.js') || entry.endsWith('.mjs')" in preparation
+    assert "content.replace(SOURCE_MAP_DIRECTIVE, '\\n')" in preparation
+
+
+def test_production_build_sanitizes_opaque_javascript_assets_after_vite() -> None:
+    package = json.loads(_text(PACKAGE_JSON))
+
+    assert package['scripts']['build'].endswith('vite build && node scripts/strip-source-map-directives.js build')
 
 
 def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() -> None:

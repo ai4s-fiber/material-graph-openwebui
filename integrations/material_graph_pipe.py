@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
@@ -43,6 +44,30 @@ FAILURE = {
     'rejected',
     'cancelled',
     'canceled',
+}
+TITLE_GENERATION = 'title_generation'
+TAGS_GENERATION = 'tags_generation'
+FOLLOW_UP_GENERATION = 'follow_up_generation'
+KNOWLEDGE_SIGNAL = 'knowledge_signal'
+SAFE_BACKGROUND_TASKS = {
+    TITLE_GENERATION,
+    TAGS_GENERATION,
+    FOLLOW_UP_GENERATION,
+}
+TITLE_MAX_LENGTH = 64
+CONVERSATION_ID_MAX_LENGTH = 128
+HISTORY_MAX_ENTRIES = 24
+HISTORY_MAX_CONTENT_CHARS = 16_000
+HISTORY_MAX_CONTENT_BYTES = 262_144
+CONVERSATION_STATE_MAX_BYTES = 65_536
+CONVERSATION_STATE_MAX_DEPTH = 8
+CONVERSATION_STATE_MAX_ITEMS = 512
+CONVERSATION_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]*$')
+CONVERSATION_STATE_CACHE_PREFIX = '\x00conversation_state:'
+CONVERSATION_STATE_PRIVATE_KEYS = {
+    'files',
+    'status',
+    'statushistory',
 }
 
 
@@ -130,23 +155,317 @@ class Pipe:
         self._trim_runs_locked()
         return result
 
-    async def pipe(
+    @staticmethod
+    def _background_task_name(
+        body: dict[str, Any],
+        explicit_task: Any,
+        explicit_metadata: Any,
+    ) -> str | None:
+        metadata = body.get('metadata')
+        metadata = metadata if isinstance(metadata, dict) else {}
+        explicit_metadata = explicit_metadata if isinstance(explicit_metadata, dict) else {}
+        raw_task = explicit_task
+        if raw_task is None:
+            raw_task = explicit_metadata.get('task')
+        if raw_task is None:
+            raw_task = metadata.get('task')
+        if raw_task is None:
+            return None
+        task = str(raw_task).strip().lower()
+        if not task:
+            return None
+        return task.rsplit('.', 1)[-1]
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ''
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get('type') == 'text':
+                parts.append(str(item.get('text') or ''))
+        return ' '.join(parts)
+
+    @staticmethod
+    def _normalized_conversation_id(raw: Any) -> str | None:
+        if not isinstance(raw, str):
+            return None
+        conversation_id = raw.strip()
+        if (
+            not conversation_id
+            or len(conversation_id) > CONVERSATION_ID_MAX_LENGTH
+            or CONVERSATION_ID_PATTERN.fullmatch(conversation_id) is None
+        ):
+            return None
+        return conversation_id
+
+    @classmethod
+    def _conversation_id(cls, body: dict[str, Any], metadata: Any) -> str | None:
+        explicit = metadata if isinstance(metadata, dict) else {}
+        embedded = body.get('metadata')
+        embedded = embedded if isinstance(embedded, dict) else {}
+        raw = explicit.get('chat_id') or embedded.get('chat_id') or body.get('chat_id')
+        return cls._normalized_conversation_id(raw)
+
+    @classmethod
+    def _bounded_conversation_state(  # noqa: C901 - one recursive JSON boundary owns all limits
+        cls, value: Any
+    ) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+
+        item_count = 0
+        active: set[int] = set()
+
+        def project(item: Any, depth: int) -> Any:  # noqa: C901
+            nonlocal item_count
+            if depth > CONVERSATION_STATE_MAX_DEPTH:
+                raise ValueError('conversation state is too deep')
+            item_count += 1
+            if item_count > CONVERSATION_STATE_MAX_ITEMS:
+                raise ValueError('conversation state has too many items')
+
+            if isinstance(item, dict):
+                identity = id(item)
+                if identity in active:
+                    raise ValueError('conversation state is cyclic')
+                active.add(identity)
+                try:
+                    projected = {}
+                    for key, child in item.items():
+                        if not isinstance(key, str):
+                            raise TypeError('conversation state keys must be strings')
+                        private_key = key.casefold().replace('_', '')
+                        if private_key in CONVERSATION_STATE_PRIVATE_KEYS:
+                            continue
+                        projected[key] = project(child, depth + 1)
+                    return projected
+                finally:
+                    active.remove(identity)
+
+            if isinstance(item, list):
+                identity = id(item)
+                if identity in active:
+                    raise ValueError('conversation state is cyclic')
+                active.add(identity)
+                try:
+                    return [project(child, depth + 1) for child in item]
+                finally:
+                    active.remove(identity)
+
+            if item is None or isinstance(item, str | int | float | bool):
+                return item
+            raise TypeError('conversation state must be JSON compatible')
+
+        try:
+            projected = project(value, 0)
+            encoded = json.dumps(
+                projected,
+                ensure_ascii=False,
+                separators=(',', ':'),
+                allow_nan=False,
+            ).encode('utf-8')
+        except (TypeError, ValueError, UnicodeEncodeError):
+            return None
+        if not projected or len(encoded) > CONVERSATION_STATE_MAX_BYTES:
+            return None
+        return projected
+
+    @staticmethod
+    def _conversation_state_cache_key(conversation_id: str) -> str:
+        return f'{CONVERSATION_STATE_CACHE_PREFIX}{conversation_id}'
+
+    def _cached_conversation_state(self, conversation_id: str) -> dict[str, Any] | None:
+        cache_key = self._conversation_state_cache_key(conversation_id)
+        with self._runs_lock:
+            now = self._clock()
+            self._prune_runs_locked(now)
+            state = self._runs.get(cache_key)
+            if not isinstance(state, dict):
+                return None
+            cached = self._bounded_conversation_state(state.get('conversation_state'))
+            if cached is None:
+                self._evict_run_locked(cache_key)
+                return None
+            previous = self._run_access.pop(cache_key, None)
+            terminal_at = previous[1] if previous is not None else None
+            self._run_access[cache_key] = (now, terminal_at)
+            return cached
+
+    def _remember_conversation_state(
+        self,
+        expected_conversation_id: str | None,
+        event_name: str,
+        data: dict[str, Any],
+    ) -> None:
+        if expected_conversation_id is None or event_name not in {'assistant_message', 'done'}:
+            return
+        conversation_id = self._normalized_conversation_id(data.get('conversation_id'))
+        if conversation_id != expected_conversation_id:
+            return
+        conversation_state = self._bounded_conversation_state(data.get('conversation_state'))
+        if conversation_state is None:
+            return
+        cache_key = self._conversation_state_cache_key(conversation_id)
+        with self._runs_lock:
+            now = self._clock()
+            self._prune_runs_locked(now)
+            self._runs[cache_key] = {'conversation_state': conversation_state}
+            self._run_access.pop(cache_key, None)
+            self._run_access[cache_key] = (now, None)
+            self._trim_runs_locked(protected_run_id=cache_key)
+
+    @staticmethod
+    def _current_user_index(messages: list[Any]) -> int | None:
+        return next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if isinstance(messages[index], dict) and messages[index].get('role') == 'user'
+            ),
+            None,
+        )
+
+    @classmethod
+    def _normalized_history_item(cls, item: Any) -> dict[str, str] | None:
+        if not isinstance(item, dict):
+            return None
+        role = item.get('role')
+        if role not in {'user', 'assistant'}:
+            return None
+        content = cls._content_text(item.get('content')).strip()
+        if not content:
+            return None
+        return {
+            'role': role,
+            'content': content[:HISTORY_MAX_CONTENT_CHARS],
+        }
+
+    @classmethod
+    def _conversation_history(cls, messages: Any) -> list[dict[str, str]]:
+        if not isinstance(messages, list):
+            return []
+
+        current_user_index = cls._current_user_index(messages)
+        if current_user_index is None:
+            return []
+
+        normalized = [
+            normalized_item
+            for item in messages[:current_user_index]
+            if (normalized_item := cls._normalized_history_item(item)) is not None
+        ]
+
+        retained: list[dict[str, str]] = []
+        remaining_bytes = HISTORY_MAX_CONTENT_BYTES
+        for item in reversed(normalized[-HISTORY_MAX_ENTRIES:]):
+            encoded = item['content'].encode('utf-8')
+            if len(encoded) > remaining_bytes:
+                encoded = encoded[:remaining_bytes]
+                content = encoded.decode('utf-8', errors='ignore')
+                if not content:
+                    break
+                encoded = content.encode('utf-8')
+                item = {**item, 'content': content}
+            retained.append(item)
+            remaining_bytes -= len(encoded)
+            if remaining_bytes <= 0:
+                break
+        retained.reverse()
+        return retained
+
+    @classmethod
+    def _deterministic_title(cls, *sources: Any) -> str:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            messages = source.get('messages')
+            if not isinstance(messages, list):
+                continue
+            for message in messages:
+                if not isinstance(message, dict) or message.get('role') != 'user':
+                    continue
+                title = ' '.join(cls._content_text(message.get('content')).split())
+                if not title:
+                    continue
+                if len(title) > TITLE_MAX_LENGTH:
+                    return f'{title[: TITLE_MAX_LENGTH - 3]}...'
+                return title
+        return '新对话'
+
+    @classmethod
+    def _background_task_response(
+        cls,
+        task: str,
+        body: dict[str, Any],
+        explicit_task_body: Any,
+        explicit_metadata: Any,
+    ) -> str:
+        if task not in SAFE_BACKGROUND_TASKS:
+            raise RuntimeError(f'Material Graph refuses unsupported Open WebUI background task: {task}')
+
+        metadata = body.get('metadata')
+        metadata = metadata if isinstance(metadata, dict) else {}
+        explicit_metadata = explicit_metadata if isinstance(explicit_metadata, dict) else {}
+        task_body = explicit_task_body
+        if not isinstance(task_body, dict):
+            task_body = explicit_metadata.get('task_body')
+        if not isinstance(task_body, dict):
+            task_body = metadata.get('task_body')
+
+        if task == TITLE_GENERATION:
+            value = {'title': cls._deterministic_title(task_body, body)}
+        elif task == TAGS_GENERATION:
+            value = {'tags': []}
+        elif task == FOLLOW_UP_GENERATION:
+            value = {'follow_ups': []}
+        else:
+            raise AssertionError(f'unhandled safe background task: {task}')
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+
+    async def pipe(  # noqa: C901 - background-task guard and streaming transport share this boundary
         self,
         body: dict[str, Any],
         __event_emitter__=None,
         __user__=None,
+        __task__=None,
+        __task_body__=None,
+        __metadata__=None,
         **_: Any,
     ) -> AsyncIterator[str]:
+        background_task = self._background_task_name(body, __task__, __metadata__)
+        if background_task is not None:
+            yield self._background_task_response(
+                background_task,
+                body,
+                __task_body__,
+                __metadata__,
+            )
+            return
+
         messages = body.get('messages') or []
         message = next(
-            (str(item.get('content', '')) for item in reversed(messages) if item.get('role') == 'user'),
+            (
+                self._content_text(item.get('content'))
+                for item in reversed(messages)
+                if isinstance(item, dict) and item.get('role') == 'user'
+            ),
             '',
         )
         payload = {
             'message': message,
             'scenario': body.get('scenario') or self.valves.scenario,
             'auto_approve': False,
+            'history': self._conversation_history(messages),
         }
+        conversation_id = self._conversation_id(body, __metadata__)
+        if conversation_id is not None:
+            payload['conversation_id'] = conversation_id
+            conversation_state = self._cached_conversation_state(conversation_id)
+            if conversation_state is not None:
+                payload['conversation_state'] = conversation_state
         if isinstance(body.get('material_graph_task'), dict):
             payload['task'] = body['material_graph_task']
         user = __user__ if isinstance(__user__, dict) else {}
@@ -173,6 +492,7 @@ class Pipe:
         base = self.valves.material_graph_api_url.rstrip('/')
         public_base = self.valves.material_graph_public_proxy_url.rstrip('/')
         timeout = httpx.Timeout(self.valves.timeout_seconds, connect=15.0)
+        assistant_delta_runs: set[str | None] = set()
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 'POST',
@@ -194,6 +514,8 @@ class Pipe:
                             client=client,
                             resync_base_url=base,
                             auth_headers=auth_headers,
+                            assistant_delta_runs=assistant_delta_runs,
+                            expected_conversation_id=conversation_id,
                         ):
                             yield token
                         lines = []
@@ -206,6 +528,8 @@ class Pipe:
                         client=client,
                         resync_base_url=base,
                         auth_headers=auth_headers,
+                        assistant_delta_runs=assistant_delta_runs,
+                        expected_conversation_id=conversation_id,
                     ):
                         yield token
 
@@ -328,6 +652,23 @@ class Pipe:
         action = data.get('action')
         kind = str(data.get('event_type') or data.get('kind') or name).lower()
         run = data.get('run_id') or data.get('runId')
+        if (
+            kind in TERMINAL
+            and action != 'material_graph'
+            and data.get('mode') in {'knowledge_answer', 'research_discussion'}
+        ):
+            return None
+        if kind == KNOWLEDGE_SIGNAL:
+            if not run:
+                return None
+            return {
+                **data,
+                'action': 'material_graph_knowledge',
+                'run_id': str(run),
+                'type': data.get('type') or name or KNOWLEDGE_SIGNAL,
+                'event_type': data.get('event_type') or KNOWLEDGE_SIGNAL,
+                'contract_version': (version or data.get('contract_version') or 'legacy'),
+            }
         if action == 'assistant_form' or kind in FORM:
             form = data.get('form') if isinstance(data.get('form'), dict) else data
             return {
@@ -481,8 +822,11 @@ class Pipe:
         client: httpx.AsyncClient | None = None,
         resync_base_url: str | None = None,
         auth_headers: Callable[[str, str], dict[str, str]] | None = None,
+        assistant_delta_runs: set[str | None] | None = None,
+        expected_conversation_id: str | None = None,
     ) -> AsyncIterator[str]:
         name, version, data = self._payload(event)
+        self._remember_conversation_state(expected_conversation_id, name, data)
         status = self._status(name, version, data, base_url)
         if status is not None and status.get('resync_required'):
             status = await self._resync(
@@ -501,7 +845,14 @@ class Pipe:
         if not token and name in TOKEN:
             token = data.get('delta') or data.get('token') or data.get('text') or data.get('content')
         if token:
-            yield str(token)
+            content_mode = str(data.get('content_mode') or event.get('content_mode') or '').lower()
+            is_final = name == 'assistant_message' or content_mode == 'final'
+            raw_run_id = data.get('run_id') or data.get('runId') or event.get('run_id') or event.get('runId')
+            run_id = str(raw_run_id) if raw_run_id is not None else None
+            if not (is_final and assistant_delta_runs is not None and run_id in assistant_delta_runs):
+                yield str(token)
+            if not is_final and name in TOKEN and assistant_delta_runs is not None:
+                assistant_delta_runs.add(run_id)
         error = event.get('error') or data.get('error')
         if error:
             raise RuntimeError(str(error))

@@ -154,6 +154,7 @@ def test_bff_signs_authoritative_method_path_user_and_roles_without_forwarding_s
     }
     signer_call: dict[str, object] = {}
     upstream: dict[str, object] = {}
+    client_options: dict[str, object] = {}
     body = b'{"approved":true}'
 
     def fake_signer(**kwargs):
@@ -183,8 +184,13 @@ def test_bff_signs_authoritative_method_path_user_and_roles_without_forwarding_s
 
     async def exercise():
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        def client_factory(**kwargs):
+            client_options.update(kwargs)
+            return client
+
         monkeypatch.setattr(router, 'build_material_graph_auth_headers', fake_signer)
-        monkeypatch.setattr(router.httpx, 'AsyncClient', lambda **_kwargs: client)
+        monkeypatch.setattr(router.httpx, 'AsyncClient', client_factory)
         response = await router._proxy(request, user, '/runs/run-123/resume/stream')
         return response
 
@@ -205,6 +211,23 @@ def test_bff_signs_authoritative_method_path_user_and_roles_without_forwarding_s
     assert upstream['headers']['idempotency-key'] == 'resume-key'
     assert 'authorization' not in upstream['headers']
     assert all('forged-browser' not in value for value in upstream['headers'].values())
+    timeout = client_options['timeout']
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 15.0
+    assert timeout.read is None
+    assert timeout.write == 180.0
+    assert timeout.pool == 180.0
+
+
+def test_bff_keeps_json_timeouts_finite(monkeypatch) -> None:
+    router = _load_router(monkeypatch)
+
+    timeout = router._upstream_timeout(streaming=False)
+
+    assert timeout.connect == 15.0
+    assert timeout.read == 180.0
+    assert timeout.write == 180.0
+    assert timeout.pool == 180.0
 
 
 def test_resume_routes_derive_only_the_validated_upstream_paths(monkeypatch) -> None:

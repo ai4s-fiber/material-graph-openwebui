@@ -73,6 +73,7 @@
 	import { setTextScale } from '$lib/utils/text-scale';
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
+	import { shouldShowChatCompletionNotification } from '$lib/components/chat/MaterialGraph/notificationPolicy';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
 	import SyncStatsModal from '$lib/components/chat/Settings/SyncStatsModal.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
@@ -618,6 +619,16 @@
 
 		if ((event.chat_id !== $chatId && !$temporaryChatEnabled) || isInBackground) {
 			if (type === 'chat:completion') {
+				if (
+					!shouldShowChatCompletionNotification({
+						eventChatId: event.chat_id,
+						currentChatId: $chatId,
+						authEnabled: $config?.features?.auth
+					})
+				) {
+					return;
+				}
+
 				const { done, content, output, title } = data;
 				const displayTitle = title || $i18n.t('New Chat');
 				const contentPreview = cleanText(removeAllDetails(getOutputText(output) || content || ''));

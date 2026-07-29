@@ -168,13 +168,31 @@ export const materialGraphTopologyKey = (snapshot?: MaterialGraphSnapshot | null
 		edges: (snapshot?.edges ?? []).map((edge) => [edge.source, edge.target, edge.kind ?? ''])
 	});
 
+const assistantFormIdentity = (event: any) => {
+	if (event?.action !== 'assistant_form') return null;
+	return [event.run_id ?? '', event.checkpoint_id ?? 'checkpoint', event.form_id ?? 'form'].join(
+		':'
+	);
+};
+
 export const appendMaterialGraphStatus = (
 	history: any[] = [],
 	event: any,
 	limit = MATERIAL_GRAPH_STATUS_HISTORY_LIMIT
 ) => {
 	const boundedLimit = Math.max(16, limit);
-	const next = [...history, event];
+	const identity = assistantFormIdentity(event);
+	let next = [...history];
+	if (identity) {
+		const existingIndex = next.findIndex((item) => assistantFormIdentity(item) === identity);
+		if (existingIndex >= 0) {
+			const previous = next[existingIndex];
+			// A stale replay must never resurrect a form already resolved by a
+			// later authoritative graph event.
+			if (previous?.resolved && !event?.resolved) return next;
+			next[existingIndex] = { ...previous, ...event };
+		} else next.push(event);
+	} else next.push(event);
 	if (next.length <= boundedLimit) return next;
 	const graph = reduceMaterialGraph(next);
 	const nonGraph = next
@@ -200,8 +218,157 @@ export const latestMaterialGraph = (history: any): MaterialGraphSnapshot | null 
 };
 
 export const latestAssistantForm = (statusHistory: any[] = []): AssistantFormDefinition | null => {
-	for (let index = statusHistory.length - 1; index >= 0; index--)
-		if (statusHistory[index]?.action === 'assistant_form')
-			return statusHistory[index]?.resolved ? null : statusHistory[index];
+	for (let index = statusHistory.length - 1; index >= 0; index--) {
+		const form = statusHistory[index];
+		if (form?.action === 'assistant_form' && !form.resolved) return form;
+	}
 	return null;
+};
+
+export type MaterialGraphResumeMerge = {
+	message: any;
+	/** Persist only after an authoritative resume boundary has resolved the original checkpoint. */
+	persist: boolean;
+};
+
+let resumeEpochSequence = 0;
+
+export const createMaterialGraphResumeEpoch = () => {
+	resumeEpochSequence += 1;
+	return `${Date.now().toString(36)}-${resumeEpochSequence.toString(36)}`;
+};
+
+const materialGraphRunId = (event: any) => String(event?.run_id ?? event?.runId ?? '').trim();
+
+const directResumeAttempt = (message: any, runId: string) =>
+	message?.materialGraphResumeAttempts?.[runId];
+
+const resolveDirectResumeForm = (history: any[], attempt: any, epoch: string) => {
+	if (!attempt || attempt.epoch !== epoch) return history;
+	return history.map((entry) => {
+		if (
+			entry?.action !== 'assistant_form' ||
+			String(entry?.run_id ?? '') !== String(attempt.run_id ?? '') ||
+			String(entry?.checkpoint_id ?? '') !== String(attempt.checkpoint_id ?? '') ||
+			String(entry?.form_id ?? '') !== String(attempt.form_id ?? '')
+		)
+			return entry;
+		return {
+			...entry,
+			resolved: true,
+			material_graph_source: 'direct_resume',
+			material_graph_epoch: epoch
+		};
+	});
+};
+
+export const shouldAcceptMaterialGraphStatus = (
+	message: any,
+	event: any,
+	source: 'pipe' | 'direct_resume',
+	epoch?: string
+) => {
+	const runId = materialGraphRunId(event);
+	if (!runId) return true;
+	const activeEpoch = message?.materialGraphResumeEpochs?.[runId];
+	if (!activeEpoch) return true;
+	return source === 'direct_resume' && epoch === activeEpoch;
+};
+
+/**
+ * Once an assistant message has entered a direct checkpoint resume, its
+ * original Pipe stream is stale. Pipe content events do not carry the resume
+ * epoch, so accepting them would overwrite the authoritative resumed summary.
+ */
+export const shouldAcceptMaterialGraphPipeContent = (message: any) =>
+	Object.keys(message?.materialGraphResumeEpochs ?? {}).length === 0;
+
+/**
+ * Merge resume-stream events into the message owned by the chat history.
+ *
+ * ResponseMessage keeps a local clone for rendering, but Chat.svelte treats
+ * history.messages as canonical and can refresh that clone while the original
+ * pipe stream is winding down. Updating only the clone therefore loses the
+ * replacement human-review form. This helper performs one canonical assignment
+ * per resume event so a later render always starts from the merged history.
+ */
+export const mergeMaterialGraphResumeEvent = (
+	history: any,
+	messageId: string,
+	event: any
+): MaterialGraphResumeMerge | null => {
+	const current = history?.messages?.[messageId];
+	if (!current) return null;
+
+	const next = { ...current };
+	const runId = String(event?.run_id ?? event?.status?.run_id ?? '').trim();
+	const source = event?.source;
+	const epoch = String(event?.epoch ?? '').trim();
+	if (source === 'direct_resume' && event?.phase === 'begin') {
+		if (!runId || !epoch) return null;
+		const submittedForm =
+			event?.status?.action === 'assistant_form'
+				? event.status
+				: latestAssistantForm(current.statusHistory ?? []);
+		next.materialGraphResumeEpochs = {
+			...(current.materialGraphResumeEpochs ?? {}),
+			[runId]: epoch
+		};
+		if (submittedForm) {
+			next.materialGraphResumeAttempts = {
+				...(current.materialGraphResumeAttempts ?? {}),
+				[runId]: {
+					run_id: runId,
+					epoch,
+					checkpoint_id: submittedForm.checkpoint_id ?? '',
+					form_id: submittedForm.form_id ?? ''
+				}
+			};
+		}
+		history.messages[messageId] = next;
+		return { message: next, persist: false };
+	}
+	if (
+		source === 'direct_resume' &&
+		(!runId ||
+			!epoch ||
+			!shouldAcceptMaterialGraphStatus(current, { run_id: runId }, source, epoch))
+	)
+		return null;
+
+	if (event?.token)
+		next.content = event.replaceContent ? event.token : `${current.content ?? ''}${event.token}`;
+	const status =
+		event?.status && source === 'direct_resume'
+			? {
+					...event.status,
+					material_graph_source: source,
+					material_graph_epoch: epoch
+				}
+			: event?.status;
+	if (status) next.statusHistory = appendMaterialGraphStatus(current.statusHistory ?? [], status);
+	const eventKind = String(
+		status?.event_type ?? status?.type ?? event?.raw?.event_type ?? event?.raw?.type ?? ''
+	)
+		.trim()
+		.toLowerCase()
+		.replaceAll('-', '_');
+	const authoritativeBoundary =
+		source === 'direct_resume' &&
+		(['terminal', 'done'].includes(eventKind) || status?.done === true);
+	if (authoritativeBoundary) {
+		next.statusHistory = resolveDirectResumeForm(
+			next.statusHistory ?? current.statusHistory ?? [],
+			directResumeAttempt(current, runId),
+			epoch
+		);
+	}
+
+	history.messages[messageId] = next;
+	return {
+		message: next,
+		persist:
+			authoritativeBoundary ||
+			Boolean(status?.action === 'assistant_form' && status.resolved === true)
+	};
 };

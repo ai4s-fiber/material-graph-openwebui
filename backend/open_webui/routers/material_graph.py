@@ -18,6 +18,14 @@ _RUN_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$')
 _RESPONSE_HEADERS = {'content-type', 'cache-control', 'x-accel-buffering', 'x-request-id'}
 
 
+def _upstream_timeout(*, streaming: bool) -> httpx.Timeout:
+    """Keep long-lived SSE reads open while bounding every other I/O phase."""
+
+    if streaming:
+        return httpx.Timeout(connect=15.0, read=None, write=180.0, pool=180.0)
+    return httpx.Timeout(180.0, connect=15.0)
+
+
 def _api_base_url() -> str:
     value = os.getenv('MATERIAL_GRAPH_API_URL', 'http://material-graph-api:8000').rstrip('/')
     parsed = urlsplit(value)
@@ -58,7 +66,10 @@ async def _proxy(request: Request, user: object, upstream_path: str) -> Response
     if idempotency_key:
         headers['Idempotency-Key'] = idempotency_key[:256]
 
-    client = httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=15.0))
+    streaming = upstream_path.endswith('/stream') or request.headers.get('accept', '').lower().startswith(
+        'text/event-stream'
+    )
+    client = httpx.AsyncClient(timeout=_upstream_timeout(streaming=streaming))
     try:
         upstream_request = client.build_request(
             request.method,

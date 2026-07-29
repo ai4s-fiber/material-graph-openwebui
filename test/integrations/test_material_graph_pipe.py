@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'backend'))
@@ -40,7 +41,15 @@ def graph_snapshot(run_id, *, graph_version=1):
     }
 
 
-async def forward(pipe, event, client=None, *, resync_base_url=None, auth_headers=None):
+async def forward(
+    pipe,
+    event,
+    client=None,
+    *,
+    resync_base_url=None,
+    auth_headers=None,
+    expected_conversation_id=None,
+):
     emitted = []
 
     async def emitter(item):
@@ -55,6 +64,7 @@ async def forward(pipe, event, client=None, *, resync_base_url=None, auth_header
             client=client,
             resync_base_url=resync_base_url,
             auth_headers=auth_headers,
+            expected_conversation_id=expected_conversation_id,
         )
     ], emitted
 
@@ -142,6 +152,201 @@ def test_full_workflow_survives_partial_events():
     assert len(graph['nodes']) == 2
     assert graph['current_node'] == 'gate'
     assert graph['logs'][0]['message'] == 'checkpoint persisted'
+
+
+def test_knowledge_signal_is_forwarded_without_mutating_execution_graph():
+    pipe = Pipe()
+    workflow_nodes = [{'id': f'node-{index}', 'label': f'Node {index}', 'status': 'pending'} for index in range(15)]
+    workflow_edges = [{'source': f'node-{index}', 'target': f'node-{index + 1}'} for index in range(14)] + [
+        {'source': f'node-{index}', 'target': f'node-{index + 2}'} for index in range(10)
+    ]
+    asyncio.run(
+        forward(
+            pipe,
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'graph_snapshot',
+                'event_type': 'graph_snapshot',
+                'action': 'material_graph',
+                'run_id': 'run-knowledge',
+                'graph_version': 1,
+                'nodes': workflow_nodes,
+                'edges': workflow_edges,
+                'logs': [],
+            },
+        )
+    )
+    knowledge_nodes = [
+        {
+            'id': 'kg-polyimide',
+            'label': '聚酰亚胺',
+            'agent_roles': ['material'],
+            'hit': True,
+        },
+        {
+            'id': 'kg-tg',
+            'label': '玻璃化转变温度',
+            'agent_roles': ['performance_testing'],
+            'hit': True,
+        },
+    ]
+    knowledge_edges = [
+        {
+            'id': 'kg-edge-1',
+            'source': 'kg-polyimide',
+            'target': 'kg-tg',
+            'relation': 'has_property',
+        }
+    ]
+    pulse = [
+        {
+            'edge_id': 'kg-edge-1',
+            'source': 'kg-polyimide',
+            'target': 'kg-tg',
+        }
+    ]
+    stats = {
+        'total_nodes': 2,
+        'total_edges': 1,
+        'visible_nodes': 2,
+        'visible_edges': 1,
+        'truncated': False,
+    }
+
+    _, events = asyncio.run(
+        forward(
+            pipe,
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'knowledge_signal',
+                'event_type': 'knowledge_signal',
+                'action': 'material_graph',
+                'signal_version': 1,
+                'run_id': 'run-knowledge',
+                'phase': 'agent_execution',
+                'workflow_node': 'material_design',
+                'graph_id': 'task-graph-run-knowledge',
+                'graph_version_label': 'V2',
+                'nodes': knowledge_nodes,
+                'edges': knowledge_edges,
+                'pulse': pulse,
+                'stats': stats,
+                'active_agents': ['material', 'performance_testing'],
+            },
+        )
+    )
+
+    signal = events[0]['data']
+    assert signal['action'] == 'material_graph_knowledge'
+    assert signal['run_id'] == 'run-knowledge'
+    assert signal['type'] == 'knowledge_signal'
+    assert signal['event_type'] == 'knowledge_signal'
+    assert signal['signal_version'] == 1
+    assert signal['phase'] == 'agent_execution'
+    assert signal['workflow_node'] == 'material_design'
+    assert signal['graph_id'] == 'task-graph-run-knowledge'
+    assert signal['graph_version_label'] == 'V2'
+    assert signal['nodes'] == knowledge_nodes
+    assert signal['edges'] == knowledge_edges
+    assert signal['pulse'] == pulse
+    assert signal['stats'] == stats
+    assert signal['active_agents'] == ['material', 'performance_testing']
+    assert len(pipe._runs['run-knowledge']['nodes']) == 15
+    assert len(pipe._runs['run-knowledge']['edges']) == 24
+    assert pipe._runs['run-knowledge']['nodes'] == workflow_nodes
+    assert pipe._runs['run-knowledge']['edges'] == workflow_edges
+
+    tokens, no_signal_events = asyncio.run(
+        forward(
+            pipe,
+            {
+                'type': 'assistant_delta',
+                'event_type': 'assistant_delta',
+                'run_id': 'run-knowledge',
+                'delta': '继续执行',
+            },
+        )
+    )
+    assert tokens == ['继续执行']
+    assert no_signal_events == []
+
+
+def test_v2_knowledge_signal_without_action_is_forwarded():
+    _, events = asyncio.run(
+        forward(
+            Pipe(),
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'knowledge_signal',
+                'event_type': 'knowledge_signal',
+                'run_id': 'conversation-chat-1234',
+                'signal_version': 1,
+                'nodes': [{'id': 'evidence:E1', 'type': 'evidence'}],
+                'edges': [
+                    {
+                        'id': 'provenance:E1:S1',
+                        'source': 'evidence:E1',
+                        'target': 'source:S1',
+                        'predicate': 'provenance',
+                    }
+                ],
+            },
+        )
+    )
+
+    assert events == [
+        {
+            'type': 'status',
+            'data': {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'knowledge_signal',
+                'event_type': 'knowledge_signal',
+                'action': 'material_graph_knowledge',
+                'run_id': 'conversation-chat-1234',
+                'signal_version': 1,
+                'nodes': [{'id': 'evidence:E1', 'type': 'evidence'}],
+                'edges': [
+                    {
+                        'id': 'provenance:E1:S1',
+                        'source': 'evidence:E1',
+                        'target': 'source:S1',
+                        'predicate': 'provenance',
+                    }
+                ],
+            },
+        }
+    ]
+
+
+def test_conversation_done_caches_state_without_emitting_empty_workflow_status():
+    pipe = Pipe()
+    conversation_state = {
+        'schema': 'material_graph.conversation_state.v1',
+        'mode': 'research_discussion',
+        'task_state': {'material_family': 'PI'},
+    }
+
+    tokens, events = asyncio.run(
+        forward(
+            pipe,
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'done',
+                'event_type': 'done',
+                'run_id': 'chat-1234',
+                'conversation_id': 'chat-1234',
+                'mode': 'research_discussion',
+                'conversation_state': conversation_state,
+                'done': True,
+            },
+            expected_conversation_id='chat-1234',
+        )
+    )
+
+    assert tokens == []
+    assert events == []
+    assert pipe._cached_conversation_state('chat-1234') == conversation_state
+    assert 'chat-1234' not in pipe._runs
 
 
 def test_token_and_non_success_terminal():
@@ -456,9 +661,23 @@ def test_pipe_signs_authenticated_user_and_uses_same_origin_resume_proxy(  # noq
         return [
             item
             async for item in pipe.pipe(
-                {'messages': [{'role': 'user', 'content': 'design'}]},
+                {
+                    'messages': [
+                        {'role': 'system', 'content': 'private system prompt'},
+                        {'role': 'user', 'content': 'Earlier question'},
+                        {'role': 'assistant', 'content': 'Earlier answer'},
+                        {
+                            'role': 'user',
+                            'content': [
+                                {'type': 'text', 'text': 'design'},
+                                {'type': 'image_url', 'image_url': {'url': 'https://private.example/image'}},
+                            ],
+                        },
+                    ]
+                },
                 __event_emitter__=emitter,
                 __user__={'id': 'user-12345678', 'role': 'user'},
+                __metadata__={'chat_id': 'chat-1234'},
             )
         ]
 
@@ -470,9 +689,185 @@ def test_pipe_signs_authenticated_user_and_uses_same_origin_resume_proxy(  # noq
         'message': 'design',
         'scenario': 'custom',
         'auto_approve': False,
+        'history': [
+            {'role': 'user', 'content': 'Earlier question'},
+            {'role': 'assistant', 'content': 'Earlier answer'},
+        ],
+        'conversation_id': 'chat-1234',
     }
     assert emitted[0]['data']['endpoint'] == '/api/v1/material-graph'
     load_material_graph_hmac_secret.cache_clear()
+
+
+def test_pipe_reuses_only_bounded_conversation_state_for_the_same_chat(monkeypatch):  # noqa: C901
+    monkeypatch.setattr(pipe_module, 'build_material_graph_auth_headers', lambda **_: {})
+    posted_payloads = []
+    response_events = [
+        [
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'assistant_message',
+                'event_type': 'assistant_message',
+                'run_id': 'chat-1234',
+                'conversation_id': 'chat-1234',
+                'content_mode': 'final',
+                'content': '请继续补充目标。',
+            },
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'done',
+                'event_type': 'done',
+                'run_id': 'chat-1234',
+                'conversation_id': 'chat-1234',
+                'status': 'completed',
+                'files': [{'url': 'https://private.example/result'}],
+                'conversation_state': {
+                    'schema': 'material_graph.conversation_state.v1',
+                    'mode': 'research_discussion',
+                    'task_state': {
+                        'material_family': 'PI',
+                        'status': {'secret': 'must not be cached'},
+                        'files': [{'url': 'https://private.example/source'}],
+                    },
+                },
+                'done': True,
+            },
+        ],
+        [],
+        [],
+    ]
+
+    class Response:
+        def __init__(self, events):
+            self.events = events
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for event in self.events:
+                yield f'data: {json.dumps(event, ensure_ascii=False)}'
+                yield ''
+
+    class Stream:
+        def __init__(self, events):
+            self.response = Response(events)
+
+        async def __aenter__(self):
+            return self.response
+
+        async def __aexit__(self, *_):
+            return None
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def stream(self, _method, _url, **kwargs):
+            posted_payloads.append(json.loads(kwargs['content']))
+            return Stream(response_events.pop(0))
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+    user = {'id': 'user-12345678', 'role': 'user'}
+
+    async def invoke(chat_id, messages):
+        return [
+            item
+            async for item in pipe.pipe(
+                {'messages': messages},
+                __user__=user,
+                __metadata__={'chat_id': chat_id},
+            )
+        ]
+
+    first_messages = [{'role': 'user', 'content': '我想做 PI 材料'}]
+    assert asyncio.run(invoke('chat-1234', first_messages)) == ['请继续补充目标。']
+
+    second_messages = [
+        *first_messages,
+        {'role': 'assistant', 'content': '请继续补充目标。'},
+        {'role': 'user', 'content': '继续'},
+    ]
+    assert asyncio.run(invoke('chat-1234', second_messages)) == []
+    assert asyncio.run(invoke('chat-other', second_messages)) == []
+
+    assert 'conversation_state' not in posted_payloads[0]
+    assert posted_payloads[1]['conversation_state'] == {
+        'schema': 'material_graph.conversation_state.v1',
+        'mode': 'research_discussion',
+        'task_state': {'material_family': 'PI'},
+    }
+    assert 'conversation_state' not in posted_payloads[2]
+    assert 'private.example' not in json.dumps(posted_payloads[1], ensure_ascii=False)
+    assert all(key not in posted_payloads[1] for key in ('status', 'files'))
+
+
+def test_conversation_context_is_recent_plain_text_and_bounded():
+    pipe = Pipe()
+    messages = [
+        {'role': 'system', 'content': 'must never be forwarded'},
+        *[
+            {
+                'role': 'user' if index % 2 == 0 else 'assistant',
+                'content': [
+                    {'type': 'text', 'text': f'context-{index}'},
+                    {'type': 'image_url', 'image_url': {'url': f'https://private.example/{index}'}},
+                ],
+                'statusHistory': [{'secret': 'must not leak'}],
+            }
+            for index in range(30)
+        ],
+        {'role': 'user', 'content': 'current request'},
+    ]
+
+    history = pipe._conversation_history(messages)
+
+    assert len(history) == 24
+    assert history[0] == {'role': 'user', 'content': 'context-6'}
+    assert history[-1] == {'role': 'assistant', 'content': 'context-29'}
+    assert all(set(item) == {'role', 'content'} for item in history)
+    assert all('private.example' not in item['content'] for item in history)
+    assert all(len(item['content']) <= pipe_module.HISTORY_MAX_CONTENT_CHARS for item in history)
+    assert sum(len(item['content'].encode('utf-8')) for item in history) <= pipe_module.HISTORY_MAX_CONTENT_BYTES
+
+
+@pytest.mark.parametrize(
+    ('chat_id', 'expected'),
+    [
+        ('chat-1234', 'chat-1234'),
+        (' local:session_1 ', 'local:session_1'),
+        ('contains whitespace', None),
+        ('../unsafe', None),
+        ('x' * 129, None),
+    ],
+)
+def test_conversation_id_is_safe_and_bounded(chat_id, expected):
+    assert Pipe._conversation_id({}, {'chat_id': chat_id}) == expected
+
+
+def test_conversation_history_enforces_utf8_byte_budget():
+    history = Pipe._conversation_history(
+        [
+            *[
+                {
+                    'role': 'assistant',
+                    'content': '高' * pipe_module.HISTORY_MAX_CONTENT_CHARS,
+                }
+                for _ in range(24)
+            ],
+            {'role': 'user', 'content': 'current request'},
+        ]
+    )
+
+    assert all(len(item['content']) <= pipe_module.HISTORY_MAX_CONTENT_CHARS for item in history)
+    assert sum(len(item['content'].encode('utf-8')) for item in history) <= pipe_module.HISTORY_MAX_CONTENT_BYTES
 
 
 def test_explicit_demo_scenario_is_forwarded_without_becoming_the_default(monkeypatch):  # noqa: C901
@@ -530,6 +925,224 @@ def test_explicit_demo_scenario_is_forwarded_without_becoming_the_default(monkey
         'polyimide_design',
         'pet_pa6_melt_spinning',
     ]
+
+
+def test_one_user_turn_posts_graph_once_and_background_tasks_never_post(  # noqa: C901
+    monkeypatch,
+):
+    graph_posts = []
+    monkeypatch.setattr(pipe_module, 'build_material_graph_auth_headers', lambda **_: {})
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            if False:
+                yield ''
+
+    class Stream:
+        async def __aenter__(self):
+            return Response()
+
+        async def __aexit__(self, *_):
+            return None
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def stream(self, method, url, **kwargs):
+            graph_posts.append((method, url, json.loads(kwargs['content'])))
+            return Stream()
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+    user = {'id': 'user-12345678', 'role': 'user'}
+    original_messages = [
+        {
+            'role': 'user',
+            'content': '请设计一种高 Tg 的聚酰亚胺，并给出实验安排。',
+        }
+    ]
+
+    async def invoke(body, **kwargs):
+        return [item async for item in pipe.pipe(body, __user__=user, **kwargs)]
+
+    assert (
+        asyncio.run(
+            invoke(
+                {
+                    'messages': original_messages,
+                }
+            )
+        )
+        == []
+    )
+    title = asyncio.run(
+        invoke(
+            {
+                'messages': [{'role': 'user', 'content': 'generated title prompt'}],
+                'metadata': {
+                    'task': 'title_generation',
+                    'task_body': {'messages': original_messages},
+                },
+            },
+        )
+    )
+    tags = asyncio.run(
+        invoke(
+            {'messages': [{'role': 'user', 'content': 'generated tags prompt'}]},
+            __task__='tags_generation',
+            __task_body__={'messages': original_messages},
+        )
+    )
+    follow_ups = asyncio.run(
+        invoke(
+            {'messages': [{'role': 'user', 'content': 'generated follow-up prompt'}]},
+            __task__='follow_up_generation',
+            __task_body__={'messages': original_messages},
+        )
+    )
+
+    assert len(graph_posts) == 1
+    assert graph_posts[0][0] == 'POST'
+    assert graph_posts[0][1].endswith('/chat/stream')
+    assert json.loads(''.join(title)) == {'title': '请设计一种高 Tg 的聚酰亚胺，并给出实验安排。'}
+    assert json.loads(''.join(tags)) == {'tags': []}
+    assert json.loads(''.join(follow_ups)) == {'follow_ups': []}
+
+
+def test_body_metadata_task_is_fail_closed_before_auth_or_network(monkeypatch):
+    client_created = False
+
+    class Client:
+        def __init__(self, **_):
+            nonlocal client_created
+            client_created = True
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+
+    async def invoke():
+        return [
+            item
+            async for item in pipe.pipe(
+                {
+                    'messages': [{'role': 'user', 'content': 'background prompt'}],
+                    'metadata': {'task': 'query_generation'},
+                }
+            )
+        ]
+
+    with pytest.raises(RuntimeError, match='background task'):
+        asyncio.run(invoke())
+    assert client_created is False
+
+
+def test_material_graph_shell_disables_nonessential_background_tasks_by_default():
+    dockerfile = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
+
+    assert 'ENABLE_FOLLOW_UP_GENERATION=false' in dockerfile
+    assert 'ENABLE_TAGS_GENERATION=false' in dockerfile
+
+
+def test_pipe_deduplicates_stream_final_per_call_and_preserves_final_only(  # noqa: C901
+    monkeypatch,
+):
+    monkeypatch.setattr(pipe_module, 'build_material_graph_auth_headers', lambda **_: {})
+    response_events = [
+        [
+            {
+                'type': 'assistant_delta',
+                'event_type': 'assistant_delta',
+                'run_id': 'r-stream',
+                'content_mode': 'incremental',
+                'delta': '你好',
+            },
+            {
+                'type': 'assistant_delta',
+                'event_type': 'assistant_delta',
+                'run_id': 'r-stream',
+                'content_mode': 'incremental',
+                'delta': '，我是材料研发助手。',
+            },
+            {
+                'type': 'assistant_message',
+                'event_type': 'assistant_message',
+                'run_id': 'r-stream',
+                'content_mode': 'final',
+                'content': '你好，我是材料研发助手。',
+                'delta': '你好，我是材料研发助手。',
+            },
+        ],
+        [
+            {
+                'type': 'assistant_message',
+                'event_type': 'assistant_message',
+                'run_id': 'r-stream',
+                'content_mode': 'final',
+                'content': '这是下一次调用的完整回答。',
+                'delta': '这是下一次调用的完整回答。',
+            }
+        ],
+    ]
+
+    class Response:
+        def __init__(self, events):
+            self.events = events
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for event in self.events:
+                yield f'data: {json.dumps(event, ensure_ascii=False)}'
+                yield ''
+
+    class Stream:
+        def __init__(self, events):
+            self.response = Response(events)
+
+        async def __aenter__(self):
+            return self.response
+
+        async def __aexit__(self, *_):
+            return None
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def stream(self, _method, _url, **_):
+            return Stream(response_events.pop(0))
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+
+    async def run():
+        return [
+            token
+            async for token in pipe.pipe(
+                {'messages': [{'role': 'user', 'content': '你好'}]},
+                __user__={'id': 'user-12345678', 'role': 'user'},
+            )
+        ]
+
+    assert asyncio.run(run()) == ['你好', '，我是材料研发助手。']
+    assert asyncio.run(run()) == ['这是下一次调用的完整回答。']
 
 
 def test_terminal_run_can_be_evicted_immediately_without_changing_emitted_status():
