@@ -532,6 +532,98 @@ def test_explicit_demo_scenario_is_forwarded_without_becoming_the_default(monkey
     ]
 
 
+def test_pipe_deduplicates_stream_final_per_call_and_preserves_final_only(  # noqa: C901
+    monkeypatch,
+):
+    monkeypatch.setattr(pipe_module, 'build_material_graph_auth_headers', lambda **_: {})
+    response_events = [
+        [
+            {
+                'type': 'assistant_delta',
+                'event_type': 'assistant_delta',
+                'run_id': 'r-stream',
+                'content_mode': 'incremental',
+                'delta': '你好',
+            },
+            {
+                'type': 'assistant_delta',
+                'event_type': 'assistant_delta',
+                'run_id': 'r-stream',
+                'content_mode': 'incremental',
+                'delta': '，我是材料研发助手。',
+            },
+            {
+                'type': 'assistant_message',
+                'event_type': 'assistant_message',
+                'run_id': 'r-stream',
+                'content_mode': 'final',
+                'content': '你好，我是材料研发助手。',
+                'delta': '你好，我是材料研发助手。',
+            },
+        ],
+        [
+            {
+                'type': 'assistant_message',
+                'event_type': 'assistant_message',
+                'run_id': 'r-stream',
+                'content_mode': 'final',
+                'content': '这是下一次调用的完整回答。',
+                'delta': '这是下一次调用的完整回答。',
+            }
+        ],
+    ]
+
+    class Response:
+        def __init__(self, events):
+            self.events = events
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for event in self.events:
+                yield f'data: {json.dumps(event, ensure_ascii=False)}'
+                yield ''
+
+    class Stream:
+        def __init__(self, events):
+            self.response = Response(events)
+
+        async def __aenter__(self):
+            return self.response
+
+        async def __aexit__(self, *_):
+            return None
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def stream(self, _method, _url, **_):
+            return Stream(response_events.pop(0))
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+
+    async def run():
+        return [
+            token
+            async for token in pipe.pipe(
+                {'messages': [{'role': 'user', 'content': '你好'}]},
+                __user__={'id': 'user-12345678', 'role': 'user'},
+            )
+        ]
+
+    assert asyncio.run(run()) == ['你好', '，我是材料研发助手。']
+    assert asyncio.run(run()) == ['这是下一次调用的完整回答。']
+
+
 def test_terminal_run_can_be_evicted_immediately_without_changing_emitted_status():
     pipe = Pipe()
     pipe.valves = Pipe.Valves(run_state_terminal_ttl_seconds=0)

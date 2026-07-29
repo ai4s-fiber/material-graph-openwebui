@@ -173,6 +173,7 @@ class Pipe:
         base = self.valves.material_graph_api_url.rstrip('/')
         public_base = self.valves.material_graph_public_proxy_url.rstrip('/')
         timeout = httpx.Timeout(self.valves.timeout_seconds, connect=15.0)
+        assistant_delta_runs: set[str | None] = set()
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 'POST',
@@ -194,6 +195,7 @@ class Pipe:
                             client=client,
                             resync_base_url=base,
                             auth_headers=auth_headers,
+                            assistant_delta_runs=assistant_delta_runs,
                         ):
                             yield token
                         lines = []
@@ -206,6 +208,7 @@ class Pipe:
                         client=client,
                         resync_base_url=base,
                         auth_headers=auth_headers,
+                        assistant_delta_runs=assistant_delta_runs,
                     ):
                         yield token
 
@@ -481,6 +484,7 @@ class Pipe:
         client: httpx.AsyncClient | None = None,
         resync_base_url: str | None = None,
         auth_headers: Callable[[str, str], dict[str, str]] | None = None,
+        assistant_delta_runs: set[str | None] | None = None,
     ) -> AsyncIterator[str]:
         name, version, data = self._payload(event)
         status = self._status(name, version, data, base_url)
@@ -501,7 +505,14 @@ class Pipe:
         if not token and name in TOKEN:
             token = data.get('delta') or data.get('token') or data.get('text') or data.get('content')
         if token:
-            yield str(token)
+            content_mode = str(data.get('content_mode') or event.get('content_mode') or '').lower()
+            is_final = name == 'assistant_message' or content_mode == 'final'
+            raw_run_id = data.get('run_id') or data.get('runId') or event.get('run_id') or event.get('runId')
+            run_id = str(raw_run_id) if raw_run_id is not None else None
+            if not (is_final and assistant_delta_runs is not None and run_id in assistant_delta_runs):
+                yield str(token)
+            if not is_final and name in TOKEN and assistant_delta_runs is not None:
+                assistant_delta_runs.add(run_id)
         error = event.get('error') or data.get('error')
         if error:
             raise RuntimeError(str(error))
