@@ -1,6 +1,7 @@
 <script lang="ts">
 	import MaterialGraphView from './View.svelte';
 	import KnowledgeGraphView from './KnowledgeGraph.svelte';
+	import { hasStartedMaterialGraphWorkflow } from './panelState';
 	import type { MaterialGraphKnowledgeGraph, MaterialGraphSnapshot } from './types';
 
 	export let workflow: MaterialGraphSnapshot | null = null;
@@ -9,7 +10,7 @@
 
 <div class="studio-graph-panel" data-studio-graph-panel="true">
 	<section class="workflow-section" aria-label="执行流程图">
-		{#if workflow}
+		{#if hasStartedMaterialGraphWorkflow(workflow)}
 			<MaterialGraphView snapshot={workflow} compact={true} />
 		{:else}
 			<div class="workflow-empty">
