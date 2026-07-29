@@ -27,6 +27,8 @@ const pypiPackages = ['black', 'pathspec', 'mypy_extensions', 'pytokens'];
 import { loadPyodide } from 'pyodide';
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import { writeFile, readFile, copyFile, readdir, rmdir, access } from 'fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const SOURCE_MAP_DIRECTIVE = /(?:\r?\n)?\/\/[#@]\s*sourceMappingURL=[^\r\n]*(?:\r?\n)*$/u;
 
@@ -60,8 +62,59 @@ function initNetworkProxyFromEnv() {
 	console.log(`Initialized network proxy "${preferedProxy}" from env`);
 }
 
+/**
+ * Resolve the exact Pyodide version from the installed package and fail closed
+ * when it differs from the package-lock entry. The dependency range in
+ * package.json is intentionally not used because its lower bound is not the
+ * version selected by the lockfile.
+ *
+ * @param {{
+ *   packageLockPath?: string;
+ *   installedPackagePath?: string;
+ * }} [paths]
+ * @returns {Promise<string>}
+ */
+export async function resolveAuthoritativePyodideVersion({
+	packageLockPath = 'package-lock.json',
+	installedPackagePath = 'node_modules/pyodide/package.json'
+} = {}) {
+	const [packageLock, installedPackage] = await Promise.all([
+		readFile(packageLockPath, 'utf8').then(JSON.parse),
+		readFile(installedPackagePath, 'utf8').then(JSON.parse)
+	]);
+
+	const lockedVersion = packageLock?.packages?.['node_modules/pyodide']?.version;
+	const installedVersion = installedPackage?.version;
+	if (typeof lockedVersion !== 'string' || lockedVersion.length === 0) {
+		throw new Error('package-lock.json does not contain node_modules/pyodide.version');
+	}
+	if (typeof installedVersion !== 'string' || installedVersion.length === 0) {
+		throw new Error('node_modules/pyodide/package.json does not contain version');
+	}
+	if (lockedVersion !== installedVersion) {
+		throw new Error(
+			`Installed Pyodide version ${installedVersion} does not match package-lock version ${lockedVersion}`
+		);
+	}
+
+	return installedVersion;
+}
+
 async function downloadPackages() {
 	console.log('Setting up pyodide + micropip');
+
+	const pyodideVersion = await resolveAuthoritativePyodideVersion();
+	try {
+		const pyodidePackageJson = JSON.parse(await readFile('static/pyodide/package.json', 'utf8'));
+		const pyodidePackageVersion = pyodidePackageJson.version;
+
+		if (pyodideVersion !== pyodidePackageVersion) {
+			console.log('Pyodide version mismatch, removing static/pyodide directory');
+			await rmdir('static/pyodide', { recursive: true });
+		}
+	} catch (err) {
+		console.log('Pyodide package not found, proceeding with download.', err);
+	}
 
 	let pyodide;
 	try {
@@ -71,21 +124,6 @@ async function downloadPackages() {
 	} catch (err) {
 		console.error('Failed to load Pyodide:', err);
 		return;
-	}
-
-	const packageJson = JSON.parse(await readFile('package.json'));
-	const pyodideVersion = packageJson.dependencies.pyodide.replace('^', '');
-
-	try {
-		const pyodidePackageJson = JSON.parse(await readFile('static/pyodide/package.json'));
-		const pyodidePackageVersion = pyodidePackageJson.version.replace('^', '');
-
-		if (pyodideVersion !== pyodidePackageVersion) {
-			console.log('Pyodide version mismatch, removing static/pyodide directory');
-			await rmdir('static/pyodide', { recursive: true });
-		}
-	} catch (err) {
-		console.log('Pyodide package not found, proceeding with download.', err);
 	}
 
 	try {
@@ -207,7 +245,14 @@ async function downloadPyPIWheels() {
 	console.log('Updated pyodide-lock.json with PyPI packages');
 }
 
-initNetworkProxyFromEnv();
-await downloadPackages();
-await copyPyodide();
-await downloadPyPIWheels();
+async function main() {
+	initNetworkProxyFromEnv();
+	await downloadPackages();
+	await copyPyodide();
+	await downloadPyPIWheels();
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;
+if (invokedPath === import.meta.url) {
+	await main();
+}
