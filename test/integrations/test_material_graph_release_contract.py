@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -10,6 +11,7 @@ CI_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-ci.yml'
 FRONTEND_WORKFLOW = ROOT / '.github' / 'workflows' / 'frontend.yaml'
 VITE_CONFIG = ROOT / 'vite.config.ts'
 PYODIDE_PREP = ROOT / 'scripts' / 'prepare-pyodide.js'
+PACKAGE_JSON = ROOT / 'package.json'
 RELEASE_IMAGE = 'ghcr.io/ai4s-fiber/material-graph-openwebui-release'
 RELEASE_REPOSITORY = 'ai4s-fiber/material-graph-openwebui-release'
 
@@ -192,6 +194,12 @@ def test_pyodide_assets_do_not_publish_third_party_source_maps() -> None:
     assert r'\/\/[#@]\s*sourceMappingURL=' in preparation
     assert "entry.endsWith('.js') || entry.endsWith('.mjs')" in preparation
     assert "content.replace(SOURCE_MAP_DIRECTIVE, '\\n')" in preparation
+
+
+def test_production_build_sanitizes_opaque_javascript_assets_after_vite() -> None:
+    package = json.loads(_text(PACKAGE_JSON))
+
+    assert package['scripts']['build'].endswith('vite build && node scripts/strip-source-map-directives.js build')
 
 
 def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() -> None:
