@@ -73,6 +73,13 @@
 		showControls.set(false);
 	}
 
+	// The right-side research context is structural desktop UI, not a
+	// dismissible utility drawer. Keep the workflow and knowledge graph
+	// available even if another legacy control attempts to close it.
+	$: if (largeScreen && !$showControls) {
+		showControls.set(true);
+	}
+
 	export const openPane = () => {
 		if (parseInt(localStorage?.chatControlsSize)) {
 			const container = document.getElementById('chat-container');
@@ -220,7 +227,7 @@
 									const node = e.node;
 									showMessage(node.data.message, true);
 								}}
-								onClose={() => showControls.set(false)}
+								onClose={closeHandler}
 							/>
 						{/if}
 					</div>
@@ -254,10 +261,7 @@
 				}
 			}
 		}}
-		onCollapse={() => {
-			if (paneReady) showControls.set(false);
-		}}
-		collapsible={true}
+		collapsible={false}
 		class="z-10 bg-white dark:bg-gray-850"
 	>
 		{#if $showControls}
@@ -286,22 +290,6 @@
 									</button>
 								{/if}
 							</div>
-							<button
-								class="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-								on:click={() => showControls.set(false)}
-								aria-label={$i18n.t('Close')}
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.5"
-									class="size-4"
-								>
-									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-								</svg>
-							</button>
 						</div>
 
 						<div class="flex-1 min-h-0">
@@ -319,7 +307,7 @@
 										}
 										showMessage(node.data.message, true);
 									}}
-									onClose={() => showControls.set(false)}
+									onClose={closeHandler}
 								/>
 							{/if}
 						</div>
