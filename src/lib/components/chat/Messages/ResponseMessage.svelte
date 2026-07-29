@@ -64,6 +64,7 @@
 	import StatusHistory from './ResponseMessage/StatusHistory.svelte';
 	import AssistantForm from './ResponseMessage/AssistantForm.svelte';
 	import { latestAssistantForm, mergeMaterialGraphResumeEvent } from '../MaterialGraph/types';
+	import { persistMaterialGraphResume } from '../MaterialGraph/persistence';
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
@@ -180,26 +181,38 @@
 
 	$: statusEntries = message?.statusHistory ?? [...(message?.status ? [message?.status] : [])];
 	$: assistantForm = latestAssistantForm(message?.statusHistory ?? []);
-	let resumePersistence: Promise<void> | null = null;
-	const persistResolvedResume = (targetMessageId: string) => {
-		if (resumePersistence || typeof saveMessage !== 'function') return;
-		resumePersistence = (async () => {
-			await tick();
-			const canonical = history.messages?.[targetMessageId];
-			if (canonical) await saveMessage(targetMessageId, structuredClone(canonical));
-		})()
-			.catch((reason) => {
-				console.error('Failed to persist the resolved Material Graph checkpoint', reason);
-			})
-			.finally(() => {
-				resumePersistence = null;
-			});
+	const resumePersistence = new Map<string, Promise<unknown>>();
+	const persistResolvedResume = (targetMessageId: string, persistenceKey: string) => {
+		if (typeof saveMessage !== 'function')
+			return Promise.reject(new globalThis.Error('Material Graph chat persistence is unavailable'));
+		const active = resumePersistence.get(persistenceKey);
+		if (active) return active;
+		const pending = persistMaterialGraphResume({
+			history,
+			messageId: targetMessageId,
+			saveMessage: (id, payload) => saveMessage(id, payload),
+			settle: tick
+		}).catch((reason) => {
+			resumePersistence.delete(persistenceKey);
+			console.error('Failed to persist the resolved Material Graph checkpoint', reason);
+			throw reason;
+		});
+		resumePersistence.set(persistenceKey, pending);
+		return pending;
 	};
 	const handleMaterialGraphResume = (resumeEvent: any) => {
 		const merged = mergeMaterialGraphResumeEvent(history, messageId, resumeEvent);
 		if (!merged) return;
 		message = structuredClone(merged.message);
-		if (merged.persist) persistResolvedResume(messageId);
+		if (merged.persist) {
+			const persistenceKey = [
+				String(resumeEvent?.run_id ?? resumeEvent?.status?.run_id ?? ''),
+				String(resumeEvent?.epoch ?? ''),
+				String(resumeEvent?.status?.checkpoint_id ?? ''),
+				String(resumeEvent?.status?.form_id ?? '')
+			].join(':');
+			return persistResolvedResume(messageId, persistenceKey);
+		}
 	};
 	$: hasVisibleStatus =
 		(model?.info?.meta?.capabilities?.status_updates ?? true) &&
@@ -717,10 +730,11 @@
 					<div>
 						{#if model?.info?.meta?.capabilities?.status_updates ?? true}
 							<StatusHistory statusHistory={message?.statusHistory} />
-							{#if assistantForm}<AssistantForm
-									form={assistantForm}
-									onResumeEvent={handleMaterialGraphResume}
-								/>{/if}
+							{#if assistantForm}
+								{#key `${assistantForm.run_id}:${assistantForm.checkpoint_id ?? ''}:${assistantForm.form_id}`}
+									<AssistantForm form={assistantForm} onResumeEvent={handleMaterialGraphResume} />
+								{/key}
+							{/if}
 						{/if}
 
 						{#if message?.files && message.files?.filter( (f) => ['image', 'file'].includes(f.type) ).length > 0}

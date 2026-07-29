@@ -13,7 +13,7 @@
 	} from '../../MaterialGraph/formSchema';
 	import { resumeRun } from '../../MaterialGraph/resume';
 	export let form: AssistantFormDefinition;
-	export let onResumeEvent: (event: ResumeEvent) => void = () => {};
+	export let onResumeEvent: (event: ResumeEvent) => void | Promise<unknown> = () => {};
 	let values: Record<string, any> = {};
 	let errors: Record<string, string> = {};
 	let submitting = false;
@@ -37,9 +37,16 @@
 		option && typeof option === 'object' ? (option.label ?? option.value) : option;
 	const submit = async () => {
 		if (submitting || submitted) return;
-		errors = validateValues(fields, values);
+		// Freeze the form/checkpoint that the user actually submitted. A later
+		// resume event can replace the component prop with the human-review
+		// form before this async function returns; resolving that newer form
+		// would resurrect the old intake checkpoint after refresh.
+		const submittedForm = structuredClone(form);
+		const submittedFields = normalizeFields(submittedForm);
+		errors = validateValues(submittedFields, values);
 		error = '';
 		if (Object.keys(errors).length) return;
+		const submittedValues = serializeValues(submittedFields, values);
 		submitting = true;
 		const epoch = createMaterialGraphResumeEpoch();
 		const directResumeEvent = (event: ResumeEvent): ResumeEvent => ({
@@ -47,20 +54,27 @@
 			source: 'direct_resume',
 			epoch,
 			phase: 'event',
-			run_id: form.run_id
+			run_id: submittedForm.run_id
 		});
 		onResumeEvent({
 			source: 'direct_resume',
 			epoch,
 			phase: 'begin',
-			run_id: form.run_id
+			run_id: submittedForm.run_id
 		});
 		try {
-			const result = await resumeRun(form, serializeValues(fields, values), (event) =>
-				onResumeEvent(directResumeEvent(event))
+			const result = await resumeRun(
+				submittedForm,
+				submittedValues,
+				(event) => void onResumeEvent(directResumeEvent(event))
 			);
 			if (result.advanced) {
-				onResumeEvent(directResumeEvent({ status: { ...form, resolved: true } as any }));
+				// This is the commit boundary for the complete authoritative
+				// resume stream. Await chat persistence before reporting success
+				// so refresh cannot fall back to the stale awaiting-input state.
+				await onResumeEvent(
+					directResumeEvent({ status: { ...submittedForm, resolved: true } as any })
+				);
 				submitted = true;
 			} else {
 				errors = { ...errors, ...(result.fieldErrors ?? {}) };
