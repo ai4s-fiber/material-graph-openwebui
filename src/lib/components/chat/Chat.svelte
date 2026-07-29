@@ -3189,6 +3189,8 @@
 						{history}
 						title={$chatTitle}
 						bind:selectedModels
+						showModelSelector={false}
+						studioMode={true}
 						shareEnabled={!!history.currentId}
 						{initNewChat}
 						scrollToTop={!isNearTop ? scrollToTop : null}

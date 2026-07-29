@@ -52,6 +52,8 @@
 	export let history;
 	export let selectedModels;
 	export let showModelSelector = true;
+	/** Material Graph Studio deliberately exposes one fixed research assistant. */
+	export let studioMode = false;
 
 	export let onSaveTempChat: () => {};
 	export let archiveChatHandler: (id: string) => void;
@@ -134,7 +136,7 @@
 				<div class="self-start flex flex-none items-center text-gray-600 dark:text-gray-400">
 					<!-- <div class="md:hidden flex self-center w-[1px] h-5 mx-2 bg-gray-300 dark:bg-stone-700" /> -->
 
-					{#if $user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) && !($user?.permissions?.chat?.temporary_enforced ?? false) : true}
+					{#if !studioMode && ($user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) && !($user?.permissions?.chat?.temporary_enforced ?? false) : true)}
 						{#if !chat?.id}
 							<Tooltip content={$i18n.t(`Temporary Chat`)}>
 								<button
@@ -204,7 +206,7 @@
 						</Tooltip>
 					{/if}
 
-					{#if shareEnabled && chat && (chat.id || $temporaryChatEnabled)}
+					{#if !studioMode && shareEnabled && chat && (chat.id || $temporaryChatEnabled)}
 						<Menu
 							{chat}
 							{shareEnabled}
@@ -232,7 +234,21 @@
 						</Menu>
 					{/if}
 
-					{#if $user?.role === 'admin' || ($user?.permissions.chat?.controls ?? true)}
+					{#if studioMode}
+						<Tooltip content="研究视图">
+							<button
+								class=" flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition"
+								on:click={async () => {
+									await showControls.set(!$showControls);
+								}}
+								aria-label="研究视图"
+							>
+								<div class=" m-auto self-center">
+									<Knobs className=" size-5" strokeWidth="1" />
+								</div>
+							</button>
+						</Tooltip>
+					{:else if $user?.role === 'admin' || ($user?.permissions.chat?.controls ?? true)}
 						<Tooltip content={$i18n.t('Controls')}>
 							<button
 								class=" flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition"
@@ -248,7 +264,7 @@
 						</Tooltip>
 					{/if}
 
-					{#if $user !== undefined && $user !== null}
+					{#if !studioMode && $user !== undefined && $user !== null}
 						<UserMenu
 							className="w-[240px]"
 							role={$user?.role}
@@ -280,7 +296,7 @@
 		</div>
 	</div>
 
-	{#if $temporaryChatEnabled && ($chatId ?? '').startsWith('local:')}
+	{#if !studioMode && $temporaryChatEnabled && ($chatId ?? '').startsWith('local:')}
 		<div class=" w-full z-30 text-center">
 			<div class="text-xs text-gray-500">{$i18n.t('Temporary Chat')}</div>
 		</div>
