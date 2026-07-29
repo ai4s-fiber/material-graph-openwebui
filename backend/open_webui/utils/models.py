@@ -20,9 +20,13 @@ from open_webui.models.users import UserModel
 from open_webui.routers import ollama, openai
 from open_webui.socket.utils import RedisDict
 from open_webui.utils.access_control import has_access, has_base_model_access
+from open_webui.utils.material_graph_models import (
+    get_material_graph_studio_models,
+    material_graph_studio_mode_enabled,
+)
 from open_webui.utils.plugin import (
-    get_functions_cache,
     get_function_module_from_cache,
+    get_functions_cache,
 )
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
@@ -64,6 +68,23 @@ async def get_all_base_models(request: Request, user: UserModel = None):
 
 
 async def get_all_models(request, refresh: bool = False, user: UserModel = None):
+    if material_graph_studio_mode_enabled():
+        models = await get_material_graph_studio_models()
+        request.app.state.BASE_MODELS = models
+        models_dict = {model['id']: model for model in models}
+        if isinstance(request.app.state.MODELS, RedisDict):
+            try:
+                request.app.state.MODELS.set(models_dict)
+            except Exception as e:
+                log.warning(
+                    'Failed to update Redis Studio model cache, using in-process cache: %s',
+                    e,
+                )
+                request.app.state.MODELS = models_dict
+        else:
+            request.app.state.MODELS = models_dict
+        return models
+
     config = await Config.get_many(
         'models.base_models_cache',
         'evaluation.arena.enable',
