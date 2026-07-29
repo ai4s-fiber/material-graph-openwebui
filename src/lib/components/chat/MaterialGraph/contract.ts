@@ -231,6 +231,28 @@ export type MaterialGraphResumeMerge = {
 	persist: boolean;
 };
 
+let resumeEpochSequence = 0;
+
+export const createMaterialGraphResumeEpoch = () => {
+	resumeEpochSequence += 1;
+	return `${Date.now().toString(36)}-${resumeEpochSequence.toString(36)}`;
+};
+
+const materialGraphRunId = (event: any) => String(event?.run_id ?? event?.runId ?? '').trim();
+
+export const shouldAcceptMaterialGraphStatus = (
+	message: any,
+	event: any,
+	source: 'pipe' | 'direct_resume',
+	epoch?: string
+) => {
+	const runId = materialGraphRunId(event);
+	if (!runId) return true;
+	const activeEpoch = message?.materialGraphResumeEpochs?.[runId];
+	if (!activeEpoch) return true;
+	return source === 'direct_resume' && epoch === activeEpoch;
+};
+
 /**
  * Merge resume-stream events into the message owned by the chat history.
  *
@@ -249,13 +271,41 @@ export const mergeMaterialGraphResumeEvent = (
 	if (!current) return null;
 
 	const next = { ...current };
-	if (event?.token) next.content = `${current.content ?? ''}${event.token}`;
-	if (event?.status)
-		next.statusHistory = appendMaterialGraphStatus(current.statusHistory ?? [], event.status);
+	const runId = String(event?.run_id ?? event?.status?.run_id ?? '').trim();
+	const source = event?.source;
+	const epoch = String(event?.epoch ?? '').trim();
+	if (source === 'direct_resume' && event?.phase === 'begin') {
+		if (!runId || !epoch) return null;
+		next.materialGraphResumeEpochs = {
+			...(current.materialGraphResumeEpochs ?? {}),
+			[runId]: epoch
+		};
+		history.messages[messageId] = next;
+		return { message: next, persist: false };
+	}
+	if (
+		source === 'direct_resume' &&
+		(!runId ||
+			!epoch ||
+			!shouldAcceptMaterialGraphStatus(current, { run_id: runId }, source, epoch))
+	)
+		return null;
+
+	if (event?.token)
+		next.content = event.replaceContent ? event.token : `${current.content ?? ''}${event.token}`;
+	const status =
+		event?.status && source === 'direct_resume'
+			? {
+					...event.status,
+					material_graph_source: source,
+					material_graph_epoch: epoch
+				}
+			: event?.status;
+	if (status) next.statusHistory = appendMaterialGraphStatus(current.statusHistory ?? [], status);
 
 	history.messages[messageId] = next;
 	return {
 		message: next,
-		persist: Boolean(event?.status?.action === 'assistant_form' && event.status.resolved === true)
+		persist: Boolean(status?.action === 'assistant_form' && status.resolved === true)
 	};
 };

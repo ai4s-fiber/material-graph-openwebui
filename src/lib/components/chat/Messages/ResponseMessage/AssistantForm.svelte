@@ -1,5 +1,9 @@
 <script lang="ts">
-	import type { AssistantFormDefinition, ResumeEvent } from '../../MaterialGraph/types';
+	import {
+		createMaterialGraphResumeEpoch,
+		type AssistantFormDefinition,
+		type ResumeEvent
+	} from '../../MaterialGraph/types';
 	import {
 		fieldKey,
 		initialValues,
@@ -37,10 +41,26 @@
 		error = '';
 		if (Object.keys(errors).length) return;
 		submitting = true;
+		const epoch = createMaterialGraphResumeEpoch();
+		const directResumeEvent = (event: ResumeEvent): ResumeEvent => ({
+			...event,
+			source: 'direct_resume',
+			epoch,
+			phase: 'event',
+			run_id: form.run_id
+		});
+		onResumeEvent({
+			source: 'direct_resume',
+			epoch,
+			phase: 'begin',
+			run_id: form.run_id
+		});
 		try {
-			const result = await resumeRun(form, serializeValues(fields, values), onResumeEvent);
+			const result = await resumeRun(form, serializeValues(fields, values), (event) =>
+				onResumeEvent(directResumeEvent(event))
+			);
 			if (result.advanced) {
-				onResumeEvent({ status: { ...form, resolved: true } as any });
+				onResumeEvent(directResumeEvent({ status: { ...form, resolved: true } as any }));
 				submitted = true;
 			} else {
 				errors = { ...errors, ...(result.fieldErrors ?? {}) };

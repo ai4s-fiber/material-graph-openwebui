@@ -129,6 +129,29 @@ export interface MaterialGraphKnowledgeGraph {
 	updatedAt?: string;
 }
 
+/**
+ * Raw, evidence-backed knowledge projection carried over SSE.
+ *
+ * It deliberately uses a distinct action so workflow reducers cannot mistake
+ * recalled knowledge nodes for execution-graph nodes.
+ */
+export interface MaterialGraphKnowledgeSignal {
+	action: 'material_graph_knowledge';
+	type?: 'knowledge_signal';
+	event_type: 'knowledge_signal';
+	run_id: string;
+	phase?: string;
+	workflow_node?: string;
+	graph_id?: string;
+	graph_version_label?: string;
+	active_agents?: string[];
+	nodes?: Array<Record<string, unknown>>;
+	edges?: Array<Record<string, unknown>>;
+	pulse?: Array<Record<string, unknown>>;
+	stats?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
 export interface AssistantFormField {
 	name?: string;
 	key?: string;
@@ -172,8 +195,16 @@ export interface AssistantFormDefinition {
 }
 export type ResumeEvent = {
 	token?: string;
-	status?: MaterialGraphSnapshot | AssistantFormDefinition;
+	/** Replace the stale awaiting-input summary with an authoritative final message. */
+	replaceContent?: boolean;
+	status?: MaterialGraphSnapshot | MaterialGraphKnowledgeSignal | AssistantFormDefinition;
 	raw?: unknown;
+	/** Direct-resume events outrank the older Pipe stream for the same run. */
+	source?: 'direct_resume';
+	/** A unique client epoch fences stale events from earlier resume attempts. */
+	epoch?: string;
+	phase?: 'begin' | 'event';
+	run_id?: string;
 };
 
 /**
@@ -198,9 +229,11 @@ export interface ResumeResult {
 }
 export {
 	appendMaterialGraphStatus,
+	createMaterialGraphResumeEpoch,
 	latestAssistantForm,
 	mergeMaterialGraphResumeEvent,
 	latestMaterialGraph,
-	materialGraphTopologyKey
+	materialGraphTopologyKey,
+	shouldAcceptMaterialGraphStatus
 } from './contract';
 export { latestKnowledgeGraph, normalizeKnowledgeGraph } from './knowledgeGraph';

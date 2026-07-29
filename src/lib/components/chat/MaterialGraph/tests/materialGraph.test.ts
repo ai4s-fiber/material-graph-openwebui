@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
 	appendMaterialGraphStatus,
 	latestAssistantForm,
+	latestMaterialGraph,
 	mergeMaterialGraphResumeEvent,
 	materialGraphTopologyKey,
 	reduceMaterialGraph,
+	shouldAcceptMaterialGraphStatus,
 	outcomeLabel
 } from '../contract';
 import { layoutWorkflow } from '../layout';
@@ -106,8 +108,19 @@ describe('Material Graph contracts', () => {
 				}
 			}
 		};
+		const epoch = 'resume-epoch-2';
+		mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'begin',
+			run_id: 'run-race',
+			epoch
+		});
 
 		const graphMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'event',
+			run_id: 'run-race',
+			epoch,
 			status: {
 				action: 'material_graph',
 				event_type: 'graph_snapshot',
@@ -118,6 +131,10 @@ describe('Material Graph contracts', () => {
 			}
 		});
 		const reviewMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'event',
+			run_id: 'run-race',
+			epoch,
 			status: {
 				action: 'assistant_form',
 				run_id: 'run-race',
@@ -129,32 +146,44 @@ describe('Material Graph contracts', () => {
 
 		// The original pipe finishes after the resume stream and contributes
 		// stale task-structure events to the same canonical message.
-		history.messages.assistant.statusHistory = appendMaterialGraphStatus(
-			history.messages.assistant.statusHistory,
-			{
-				action: 'material_graph',
-				event_type: 'terminal',
-				run_id: 'run-race',
-				graph_version: 3,
-				current_node: 'task_structure',
-				status: 'awaiting_input'
-			}
-		);
-		history.messages.assistant.statusHistory = appendMaterialGraphStatus(
-			history.messages.assistant.statusHistory,
-			oldForm
+		const stalePipeGraph = {
+			action: 'material_graph',
+			event_type: 'terminal',
+			run_id: 'run-race',
+			graph_version: 3,
+			current_node: 'task_structure',
+			status: 'awaiting_input'
+		};
+		expect(
+			shouldAcceptMaterialGraphStatus(history.messages.assistant, stalePipeGraph, 'pipe')
+		).toBe(false);
+		expect(shouldAcceptMaterialGraphStatus(history.messages.assistant, oldForm, 'pipe')).toBe(
+			false
 		);
 
 		const resolvedMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'event',
+			run_id: 'run-race',
+			epoch,
 			status: { ...oldForm, resolved: true }
+		});
+		const staleDirectMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			source: 'direct_resume',
+			phase: 'event',
+			run_id: 'run-race',
+			epoch: 'resume-epoch-1',
+			status: stalePipeGraph
 		});
 		// A clone refreshed from Chat.svelte's canonical source must retain the
 		// replacement form instead of reverting to the old intake checkpoint.
 		const refreshed = structuredClone(history.messages.assistant);
 		expect(latestAssistantForm(refreshed.statusHistory)?.form_id).toBe('human-review:run-race');
+		expect(latestMaterialGraph(history)?.current_node).toBe('human_review');
 		expect(graphMerge?.persist).toBe(false);
 		expect(reviewMerge?.persist).toBe(false);
 		expect(resolvedMerge?.persist).toBe(true);
+		expect(staleDirectMerge).toBeNull();
 	});
 	it('requests persistence once, only when the original form is resolved', () => {
 		const history: any = {

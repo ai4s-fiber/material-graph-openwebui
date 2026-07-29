@@ -69,7 +69,10 @@
 	} from '$lib/utils';
 	import { AudioQueue } from '$lib/utils/audio';
 	import { getOutputText } from './Messages/structuredOutput';
-	import { appendMaterialGraphStatus } from './MaterialGraph/types';
+	import {
+		appendMaterialGraphStatus,
+		shouldAcceptMaterialGraphStatus
+	} from './MaterialGraph/types';
 
 	import {
 		archiveChatById,
@@ -633,7 +636,9 @@
 				const data = event?.data?.data ?? null;
 
 				if (type === 'status') {
-					message.statusHistory = appendMaterialGraphStatus(message?.statusHistory ?? [], data);
+					if (shouldAcceptMaterialGraphStatus(message, data, 'pipe')) {
+						message.statusHistory = appendMaterialGraphStatus(message?.statusHistory ?? [], data);
+					}
 				} else if (type === 'context_compaction') {
 					handleContextCompactionStatus(data);
 				} else if (type === 'chat:active') {

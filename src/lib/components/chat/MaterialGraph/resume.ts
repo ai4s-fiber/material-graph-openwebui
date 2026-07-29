@@ -1,5 +1,6 @@
 import type {
 	AssistantFormDefinition,
+	MaterialGraphKnowledgeSignal,
 	MaterialGraphSnapshot,
 	ResumeEvent,
 	ResumeResult
@@ -12,6 +13,8 @@ type ResumeTracker = ResumeResult & {
 	baselineCheckpointId: string | null;
 	originalFormKey: string;
 	sawGraph: boolean;
+	sawTerminalBoundary: boolean;
+	sawAssistantDelta: boolean;
 	activeFormKey?: string;
 };
 
@@ -64,16 +67,25 @@ const trackerFor = (form: AssistantFormDefinition, streamed: boolean): ResumeTra
 	baselineGraphVersion: form.graph_version,
 	baselineCheckpointId: form.checkpoint_id ?? null,
 	originalFormKey: formKey(form.run_id, form.checkpoint_id, form.form_id),
-	sawGraph: false
+	sawGraph: false,
+	sawTerminalBoundary: false,
+	sawAssistantDelta: false
 });
 
 const unwrap = (raw: JsonRecord) => {
 	const envelope = isRecord(raw.event) ? raw.event : undefined;
-	return envelope?.type === 'status' && isRecord(envelope.data) ? envelope.data : raw;
+	if (
+		['status', 'knowledge_signal'].includes(normalized(envelope?.type)) &&
+		isRecord(envelope?.data)
+	)
+		return envelope.data;
+	if (['status', 'knowledge_signal'].includes(normalized(raw.type)) && isRecord(raw.data))
+		return raw.data;
+	return raw;
 };
 
 const eventType = (raw: JsonRecord, payload: JsonRecord) =>
-	normalized(raw.event_type ?? raw.type ?? payload.event_type ?? payload.type ?? raw.event?.type);
+	normalized(raw.event_type ?? payload.event_type ?? payload.type ?? raw.type ?? raw.event?.type);
 
 const eventRunId = (raw: JsonRecord, payload: JsonRecord) =>
 	textValue(
@@ -97,9 +109,25 @@ const formFrom = (raw: JsonRecord, payload: JsonRecord, type: string) => {
 };
 
 const graphFrom = (raw: JsonRecord, payload: JsonRecord, type: string) => {
+	if (type === 'knowledge_signal') return undefined;
 	if (payload.action === 'material_graph') return payload;
 	if (raw.action === 'material_graph') return raw;
 	return graphEvents.has(type) || type === 'done' || type === 'error' ? payload : undefined;
+};
+
+const knowledgeFrom = (
+	payload: JsonRecord,
+	type: string,
+	runId: string | undefined
+): MaterialGraphKnowledgeSignal | undefined => {
+	if (type !== 'knowledge_signal' || !runId) return undefined;
+	return {
+		...payload,
+		action: 'material_graph_knowledge',
+		type: 'knowledge_signal',
+		event_type: 'knowledge_signal',
+		run_id: runId
+	};
 };
 
 const validationMessage = (form: JsonRecord, raw: JsonRecord) => {
@@ -173,6 +201,8 @@ const observe = (
 	if (graph && authoritative) {
 		tracker.authoritative = true;
 		tracker.sawGraph = tracker.sawGraph || graphEvents.has(type) || type === 'done';
+		tracker.sawTerminalBoundary =
+			tracker.sawTerminalBoundary || type === 'terminal' || type === 'done';
 		if (status) tracker.status = status;
 		if (outcome) tracker.outcome = outcome;
 		if (status || outcome) tracker.awaitingInput = (status || outcome) === 'awaiting_input';
@@ -226,7 +256,7 @@ const statusEvent = (
 	return undefined;
 };
 
-const finish = (tracker: ResumeTracker): ResumeResult => {
+const finish = (tracker: ResumeTracker, requireStreamBoundary = false): ResumeResult => {
 	const changedNode =
 		tracker.current_node !== undefined && tracker.current_node !== tracker.baselineCurrentNode;
 	const changedVersion =
@@ -236,6 +266,9 @@ const finish = (tracker: ResumeTracker): ResumeResult => {
 			: tracker.graph_version > tracker.baselineGraphVersion);
 	const changedForm =
 		tracker.activeFormKey !== undefined && tracker.activeFormKey !== tracker.originalFormKey;
+	if (requireStreamBoundary && !tracker.sawTerminalBoundary && !changedForm) {
+		throw new Error('恢复流在到达下一检查点前意外结束，原表单已保留，请重试。');
+	}
 	const changedCheckpoint =
 		tracker.checkpoint_id !== undefined && tracker.checkpoint_id !== tracker.baselineCheckpointId;
 	const completedOrReview = ['complete', 'completed', 'awaiting_review'].includes(
@@ -276,6 +309,8 @@ const finish = (tracker: ResumeTracker): ResumeResult => {
 		baselineCheckpointId: _baselineCheckpointId,
 		originalFormKey: _originalFormKey,
 		sawGraph: _sawGraph,
+		sawTerminalBoundary: _sawTerminalBoundary,
+		sawAssistantDelta: _sawAssistantDelta,
 		activeFormKey: _activeFormKey,
 		...result
 	} = tracker;
@@ -289,21 +324,28 @@ const consumeFrame = (
 	emit: (event: ResumeEvent) => void,
 	sseType?: string
 ) => {
-	if (!data || data === '[DONE]') return;
+	if (data === '[DONE]' || (!data && normalized(sseType) === 'done')) {
+		tracker.sawTerminalBoundary = true;
+		tracker.terminal = true;
+		return;
+	}
+	if (!data) return;
 	let raw: JsonRecord;
 	try {
-		raw = JSON.parse(data);
+		const parsed = JSON.parse(data);
+		if (!isRecord(parsed)) throw new Error('invalid event');
+		raw = parsed;
 	} catch {
 		throw new Error('恢复流返回了无法解析的 SSE 事件');
 	}
 	if (sseType && !raw.event_type && !raw.type) raw.event_type = sseType;
-	if (!isRecord(raw)) throw new Error('恢复流返回了无效的 SSE 事件');
 	const payload = unwrap(raw);
 	const type = eventType(raw, payload);
 	const eventRun = eventRunId(raw, payload);
 	if (eventRun && eventRun !== runId) throw new Error('恢复流返回了不匹配的 run_id');
 	const form = formFrom(raw, payload, type);
 	const graph = graphFrom(raw, payload, type);
+	const knowledge = knowledgeFrom(payload, type, eventRun);
 	const embeddedFormRun = form ? textValue(form.run_id, form.runId) : undefined;
 	const embeddedGraphRun = graph ? textValue(graph.run_id, graph.runId) : undefined;
 	if (embeddedFormRun && embeddedFormRun !== runId) throw new Error('恢复流表单的 run_id 不匹配');
@@ -316,7 +358,7 @@ const consumeFrame = (
 		if (!incomingFormId || !incomingCheckpointId)
 			throw new Error('恢复流表单缺少 form_id 或 checkpoint_id');
 	}
-	const token = textValue(
+	const incrementalToken = textValue(
 		raw.delta,
 		raw.token,
 		payload.delta,
@@ -325,9 +367,21 @@ const consumeFrame = (
 			? payload.text
 			: undefined
 	);
+	const isAssistantDelta = ['token', 'assistant_token', 'text_delta', 'assistant_delta'].includes(
+		type
+	);
+	if (isAssistantDelta && incrementalToken) tracker.sawAssistantDelta = true;
+	const finalContent =
+		type === 'assistant_message'
+			? textValue(payload.content, raw.content, payload.text, raw.text)
+			: undefined;
+	const replaceContent = Boolean(finalContent && !tracker.sawAssistantDelta);
+	const token = incrementalToken ?? (replaceContent ? finalContent : undefined);
 	observe(tracker, raw, payload, form, graph, type, authoritative);
-	const status = authoritative ? statusEvent(raw, payload, form, graph, runId) : undefined;
-	if (token || status) emit({ token, status, raw });
+	const status = authoritative
+		? (knowledge ?? statusEvent(raw, payload, form, graph, runId))
+		: undefined;
+	if (token || status) emit({ token, replaceContent, status, raw });
 };
 
 export const parseSse = async (
@@ -336,44 +390,51 @@ export const parseSse = async (
 	emit: (event: ResumeEvent) => void
 ): Promise<ResumeResult> => {
 	const tracker = trackerFor(form, true);
-	if (!response.body) return finish(tracker);
+	if (!response.body) throw new Error('恢复流在到达下一检查点前意外结束，原表单已保留，请重试。');
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
-	while (true) {
-		const { done, value } = await reader.read();
-		buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-		const chunks = buffer.split(/\r?\n\r?\n/);
-		buffer = chunks.pop() ?? '';
-		for (const chunk of chunks) {
-			const data = chunk
+	let completedRead = false;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+			const chunks = buffer.split(/\r?\n\r?\n/);
+			buffer = chunks.pop() ?? '';
+			for (const chunk of chunks) {
+				const data = chunk
+					.split(/\r?\n/)
+					.filter((line) => line.startsWith('data:'))
+					.map((line) => line.slice(5).trim())
+					.join('\n');
+				const sseType = chunk
+					.split(/\r?\n/)
+					.find((line) => line.startsWith('event:'))
+					?.slice(6)
+					.trim();
+				consumeFrame(data, form.run_id, tracker, emit, sseType);
+			}
+			if (done) break;
+		}
+		if (buffer.trim()) {
+			const data = buffer
 				.split(/\r?\n/)
 				.filter((line) => line.startsWith('data:'))
 				.map((line) => line.slice(5).trim())
 				.join('\n');
-			const sseType = chunk
+			const sseType = buffer
 				.split(/\r?\n/)
 				.find((line) => line.startsWith('event:'))
 				?.slice(6)
 				.trim();
 			consumeFrame(data, form.run_id, tracker, emit, sseType);
 		}
-		if (done) break;
+		completedRead = true;
+	} finally {
+		if (!completedRead) await reader.cancel().catch(() => undefined);
+		reader.releaseLock();
 	}
-	if (buffer.trim()) {
-		const data = buffer
-			.split(/\r?\n/)
-			.filter((line) => line.startsWith('data:'))
-			.map((line) => line.slice(5).trim())
-			.join('\n');
-		const sseType = buffer
-			.split(/\r?\n/)
-			.find((line) => line.startsWith('event:'))
-			?.slice(6)
-			.trim();
-		consumeFrame(data, form.run_id, tracker, emit, sseType);
-	}
-	return finish(tracker);
+	return finish(tracker, true);
 };
 
 export const resumeRun = async (
