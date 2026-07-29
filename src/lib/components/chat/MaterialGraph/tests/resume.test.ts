@@ -6,6 +6,7 @@ import {
 	reduceMaterialGraph
 } from '../contract';
 import { latestKnowledgeGraph } from '../knowledgeGraph';
+import { persistMaterialGraphResume } from '../persistence';
 import { resumeKey, resumeRun } from '../resume';
 const form: any = {
 	action: 'assistant_form',
@@ -513,12 +514,27 @@ describe('resume adapter', () => {
 		);
 		expect(mergeResults.some((merge) => merge?.persist)).toBe(false);
 		expect(resolved?.persist).toBe(true);
+		const saveMessage = vi.fn().mockResolvedValue(undefined);
+		const settled = vi.fn().mockResolvedValue(undefined);
+		const persisted = resolved?.persist
+			? await persistMaterialGraphResume({
+					history,
+					messageId: 'assistant',
+					saveMessage,
+					settle: settled
+				})
+			: null;
+		expect(persisted).not.toBeNull();
+		expect(settled).toHaveBeenCalledOnce();
+		expect(saveMessage).toHaveBeenCalledOnce();
+		expect(saveMessage).toHaveBeenCalledWith('assistant', persisted);
 
-		// Simulate the canonical chat payload being serialized by Open WebUI and
-		// reconstructed after a full browser refresh.
+		// Simulate the exact payload handed to Open WebUI's persistence sink
+		// being serialized by the backend and reconstructed after a full
+		// browser refresh.
 		const reloaded = {
 			messages: {
-				assistant: JSON.parse(JSON.stringify(history.messages.assistant))
+				assistant: JSON.parse(JSON.stringify(saveMessage.mock.calls[0][1]))
 			}
 		};
 		const restoredMessage = reloaded.messages.assistant;
@@ -602,6 +618,8 @@ describe('resume adapter', () => {
 			}
 		};
 		const epoch = 'interrupted-resume';
+		const saveMessage = vi.fn().mockResolvedValue(undefined);
+		const persistence: Promise<unknown>[] = [];
 		mergeMaterialGraphResumeEvent(history, 'assistant', {
 			source: 'direct_resume',
 			phase: 'begin',
@@ -615,19 +633,27 @@ describe('resume adapter', () => {
 				intakeForm,
 				{ material_family: 'PI', objective: '高 Tg' },
 				(event) => {
-					mergeResults.push(
-						mergeMaterialGraphResumeEvent(history, 'assistant', {
-							...event,
-							source: 'direct_resume',
-							phase: 'event',
-							run_id: 'run-1',
-							epoch
-						})
-					);
+					const merged = mergeMaterialGraphResumeEvent(history, 'assistant', {
+						...event,
+						source: 'direct_resume',
+						phase: 'event',
+						run_id: 'run-1',
+						epoch
+					});
+					mergeResults.push(merged);
+					if (merged?.persist)
+						persistence.push(
+							persistMaterialGraphResume({
+								history,
+								messageId: 'assistant',
+								saveMessage
+							})
+						);
 				},
 				fetcher
 			)
 		).rejects.toThrow('意外结束');
+		await Promise.all(persistence);
 
 		const reloaded = {
 			messages: {
@@ -635,6 +661,7 @@ describe('resume adapter', () => {
 			}
 		};
 		expect(mergeResults.some((merge) => merge?.persist)).toBe(false);
+		expect(saveMessage).not.toHaveBeenCalled();
 		expect(latestAssistantForm(reloaded.messages.assistant.statusHistory)).toEqual(
 			expect.objectContaining({
 				run_id: 'run-1',
