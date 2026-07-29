@@ -74,6 +74,61 @@ export interface MaterialGraphSnapshot {
 	retryable?: boolean;
 	retry_after_seconds?: number;
 }
+
+export type MaterialGraphKnowledgeAgent =
+	| 'material'
+	| 'process'
+	| 'performance_testing'
+	| 'safety_quality'
+	| 'evaluation'
+	| 'experiment_design';
+
+/**
+ * `shared_retrieval` is deliberately not an Agent. It is the neutral staging
+ * area used before the backend has supplied a real Agent View membership. That
+ * lets the UI show an early, real retrieval without attributing it to an Agent.
+ */
+export type MaterialGraphKnowledgeZone = MaterialGraphKnowledgeAgent | 'shared_retrieval';
+
+export interface MaterialGraphKnowledgeNode {
+	id: string;
+	label: string;
+	agentView: MaterialGraphKnowledgeZone;
+	agentViews?: MaterialGraphKnowledgeAgent[];
+	description?: string;
+	hit?: boolean;
+	active?: boolean;
+	metadata?: Record<string, unknown>;
+}
+
+export interface MaterialGraphKnowledgeEdge {
+	id: string;
+	source: string;
+	target: string;
+	relation?: string;
+	agentViews?: MaterialGraphKnowledgeAgent[];
+	active?: boolean;
+	pulse?: boolean;
+}
+
+export interface MaterialGraphKnowledgeGraph {
+	runId: string;
+	phase: string;
+	workflowNode?: string;
+	graphId?: string;
+	graphVersionLabel?: string;
+	activeAgents: string[];
+	nodes: MaterialGraphKnowledgeNode[];
+	edges: MaterialGraphKnowledgeEdge[];
+	pulse: Array<Record<string, any>>;
+	receivedNodeCount: number;
+	receivedEdgeCount: number;
+	omittedNodeCount: number;
+	omittedEdgeCount: number;
+	truncated: boolean;
+	updatedAt?: string;
+}
+
 export interface AssistantFormField {
 	name?: string;
 	key?: string;
@@ -147,3 +202,4 @@ export {
 	latestMaterialGraph,
 	materialGraphTopologyKey
 } from './contract';
+export { latestKnowledgeGraph, normalizeKnowledgeGraph } from './knowledgeGraph';

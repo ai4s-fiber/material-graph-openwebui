@@ -1,41 +1,16 @@
 <script context="module" lang="ts">
-	let savedTab: 'controls' | 'files' | 'overview' | 'materialGraph' = 'controls';
+	let savedTab: 'overview' | 'materialGraph' = 'materialGraph';
 </script>
 
 <script lang="ts">
-	import { SvelteFlowProvider } from '@xyflow/svelte';
-	import { slide } from 'svelte/transition';
 	import { Pane, PaneResizer } from 'paneforge';
-	import { v4 as uuidv4 } from 'uuid';
 
-	import { onDestroy, onMount, tick, getContext } from 'svelte';
-	import {
-		config,
-		terminalServers,
-		mobile,
-		showControls,
-		showCallOverlay,
-		showArtifacts,
-		showEmbeds,
-		settings,
-		showFileNavPath,
-		selectedTerminalId,
-		user
-	} from '$lib/stores';
-
-	import { uploadFile } from '$lib/apis/files';
-	import { toast } from 'svelte-sonner';
-
-	import Controls from './Controls/Controls.svelte';
-	import CallOverlay from './MessageInput/CallOverlay.svelte';
+	import { onMount, tick, getContext } from 'svelte';
+	import { showControls } from '$lib/stores';
 	import Drawer from '../common/Drawer.svelte';
-	import Artifacts from './Artifacts.svelte';
-	import Embeds from './ChatControls/Embeds.svelte';
-	import FileNav from './FileNav.svelte';
-	import PyodideFileNav from './PyodideFileNav.svelte';
 	import Overview from './Overview.svelte';
-	import MaterialGraphView from './MaterialGraph/View.svelte';
-	import { latestMaterialGraph } from './MaterialGraph/types';
+	import StudioGraphPanel from './MaterialGraph/StudioGraphPanel.svelte';
+	import { latestKnowledgeGraph, latestMaterialGraph } from './MaterialGraph/types';
 
 	const i18n = getContext('i18n');
 
@@ -59,17 +34,21 @@
 	export let pane: Pane | null = null;
 
 	let largeScreen = false;
-	let dragged = false;
 	let minSize = 0;
 	let paneReady = false;
 
-	// Tab state for Controls+Files panel
+	// Tab state for the compact graph panel.
 	let activeTab = savedTab;
 	let lastAutoOpenedRun = '';
 	$: materialGraph = latestMaterialGraph(history);
-	$: showMaterialGraphTab = materialGraph !== null;
-	$: if (materialGraph?.run_id && materialGraph.run_id !== lastAutoOpenedRun) {
-		lastAutoOpenedRun = materialGraph.run_id;
+	$: knowledgeGraph = latestKnowledgeGraph(history);
+	// The workflow is a permanent part of this product, not a transient debug
+	// inspector. Before a task begins it intentionally renders an honest empty
+	// state instead of hiding the whole right-hand workspace.
+	$: showMaterialGraphTab = true;
+	$: activeRunId = materialGraph?.run_id ?? knowledgeGraph?.runId ?? '';
+	$: if (activeRunId && activeRunId !== lastAutoOpenedRun) {
+		lastAutoOpenedRun = activeRunId;
 		activeTab = 'materialGraph';
 		showControls.set(true);
 	}
@@ -80,93 +59,19 @@
 
 	$: hasMessages = history?.messages && Object.keys(history.messages).length > 0;
 
-	$: showControlsTab = $user?.role === 'admin' || ($user?.permissions?.chat?.controls ?? true);
-	$: showFilesTab =
-		($selectedTerminalId &&
-			(($terminalServers ?? []).some((t) => t.id && t.id === $selectedTerminalId) ||
-				$user?.role === 'admin' ||
-				($user?.permissions?.features?.direct_tool_servers ?? true))) ||
-		(codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter');
+	// Material Graph Studio deliberately removes Open WebUI's advanced controls and file tabs.
 	$: showOverviewTab = hasMessages;
 
 	// Tab fallback: if active tab becomes hidden, switch to next available
-	$: if (!showOverviewTab && activeTab === 'overview') activeTab = 'controls';
-	$: if (!showMaterialGraphTab && activeTab === 'materialGraph') activeTab = 'controls';
-	$: if (!showFilesTab && activeTab === 'files') activeTab = 'controls';
-	$: if (!showControlsTab && activeTab === 'controls') {
-		if (showFilesTab) activeTab = 'files';
-		else if (showOverviewTab) activeTab = 'overview';
-	}
+	$: if (!showOverviewTab && activeTab === 'overview' && showMaterialGraphTab)
+		activeTab = 'materialGraph';
+	$: if (!showMaterialGraphTab && activeTab === 'materialGraph' && showOverviewTab)
+		activeTab = 'overview';
 
 	// Auto-close if there are no visible tabs
-	$: if (!showControlsTab && !showFilesTab && !showOverviewTab) {
+	$: if (!showMaterialGraphTab && !showOverviewTab) {
 		showControls.set(false);
 	}
-
-	// Auto-switch to Files tab when display_file is triggered
-	$: if ($showFileNavPath) {
-		activeTab = 'files';
-		showControls.set(true);
-	}
-
-	// Auto-open Files tab when a terminal is selected (suppress panel open when full-screen)
-	$: if ($selectedTerminalId && showFilesTab) {
-		activeTab = 'files';
-		if (largeScreen) {
-			showControls.set($settings?.showFilesOnTerminalSelect ?? true);
-		}
-	}
-
-	// Clear selected direct terminal if user lost permission
-	$: if (
-		$selectedTerminalId &&
-		!($terminalServers ?? []).some((t) => t.id && t.id === $selectedTerminalId) &&
-		!($user?.role === 'admin' || ($user?.permissions?.features?.direct_tool_servers ?? true))
-	) {
-		selectedTerminalId.set(null);
-	}
-
-	// Attach a terminal file to the chat input
-	const handleTerminalAttach = async (blob: Blob, name: string, contentType: string) => {
-		const tempItemId = uuidv4();
-		const fileItem = {
-			type: 'file',
-			file: '',
-			id: null,
-			url: '',
-			name,
-			collection_name: '',
-			status: 'uploading',
-			error: '',
-			itemId: tempItemId,
-			size: blob.size
-		};
-
-		files = [...files, fileItem];
-
-		try {
-			const file = new File([blob], name, { type: contentType || 'application/octet-stream' });
-			const uploaded = await uploadFile(localStorage.token, file);
-			if (!uploaded) throw new Error('Upload failed');
-
-			const idx = files.findIndex((f) => f.itemId === tempItemId);
-			if (idx !== -1) {
-				files[idx] = {
-					...fileItem,
-					status: 'uploaded',
-					file: uploaded,
-					id: uploaded.id,
-					url: `${uploaded.id}`,
-					collection_name: uploaded?.meta?.collection_name
-				};
-				files = files;
-			}
-			toast.success($i18n.t('File attached to chat'));
-		} catch (e) {
-			files = files.filter((f) => f.itemId !== tempItemId);
-			toast.error($i18n.t('Failed to attach file'));
-		}
-	};
 
 	export const openPane = () => {
 		if (parseInt(localStorage?.chatControlsSize)) {
@@ -180,30 +85,16 @@
 		}
 	};
 
-	const handleMediaQuery = async (e) => {
+	const handleMediaQuery = (e) => {
 		if (e.matches) {
 			largeScreen = true;
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
+			// Material Graph Studio is a three-pane research workbench on desktop:
+			// chat on the centre, workflow/knowledge context on the right.
+			showControls.set(true);
 		} else {
 			largeScreen = false;
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
 			pane = null;
 		}
-	};
-
-	const onMouseDown = () => {
-		dragged = true;
-	};
-	const onMouseUp = () => {
-		dragged = false;
 	};
 
 	onMount(() => {
@@ -253,9 +144,6 @@
 		};
 		init();
 
-		document.addEventListener('mousedown', onMouseDown);
-		document.addEventListener('mouseup', onMouseUp);
-
 		return () => {
 			isDestroyed = true;
 			paneReady = false;
@@ -264,8 +152,6 @@
 				showControls.set(false);
 			}
 			mediaQuery.removeEventListener('change', handleMediaQuery);
-			document.removeEventListener('mousedown', onMouseDown);
-			document.removeEventListener('mouseup', onMouseUp);
 		};
 	});
 
@@ -273,15 +159,9 @@
 		if (!largeScreen) {
 			showControls.set(false);
 		}
-		showArtifacts.set(false);
-		showEmbeds.set(false);
-		if ($showCallOverlay) showCallOverlay.set(false);
 	};
 
 	$: if (paneReady && !chatId) closeHandler();
-
-	// Helper: is a "special" full-screen panel active?
-	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
 </script>
 
 {#if !largeScreen}
@@ -292,112 +172,59 @@
 			className="min-h-[100dvh] !bg-white dark:!bg-gray-850"
 		>
 			<div class="h-[100dvh] flex flex-col">
-				{#if $showCallOverlay}
-					<div
-						class="h-full max-h-[100dvh] bg-white text-gray-700 dark:bg-black dark:text-gray-300 flex justify-center"
-					>
-						<CallOverlay
-							bind:files
-							{submitPrompt}
-							{stopResponse}
-							{modelId}
-							{chatId}
-							{eventTarget}
-							on:close={() => showControls.set(false)}
-						/>
-					</div>
-				{:else if $showEmbeds}
-					<Embeds />
-				{:else if $showArtifacts}
-					<Artifacts {history} />
-				{:else}
-					<!-- Controls + Files tabs -->
-					<div class="flex flex-col h-full min-h-0">
-						<!-- Tab bar -->
-						<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
-							<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
-								{#if showControlsTab}
-									<button
-										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-										'controls'
-											? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white'
-											: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'controls')}
-									>
-										{$i18n.t('Controls')}
-									</button>
-								{/if}
-								{#if showFilesTab}
-									<button
-										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-										'files'
-											? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white'
-											: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'files')}
-									>
-										{$i18n.t('Files')}
-									</button>
-								{/if}
-								{#if showMaterialGraphTab}
-									<button class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab === 'materialGraph' ? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}" on:click={() => (activeTab = 'materialGraph')}>Graph</button>
-								{/if}								{#if showOverviewTab}
-									<button
-										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-										'overview'
-											? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white'
-											: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'overview')}
-									>
-										{$i18n.t('Overview')}
-									</button>
-								{/if}
-							</div>
-							<button
-								class="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-								on:click={() => showControls.set(false)}
-								aria-label={$i18n.t('Close')}
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.5"
-									class="size-4"
+				<!-- Material Graph Studio: workflow + truthful knowledge signal -->
+				<div class="flex flex-col h-full min-h-0">
+					<!-- Tab bar -->
+					<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
+						<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
+							{#if showMaterialGraphTab}
+								<button
+									class="studio-tab {activeTab === 'materialGraph' ? 'active' : ''}"
+									on:click={() => (activeTab = 'materialGraph')}>运行图谱</button
 								>
-									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-								</svg>
-							</button>
-						</div>
-
-						<div
-							class="flex-1 min-h-0 {activeTab === 'overview'
-								? 'h-full'
-								: activeTab === 'controls'
-									? 'overflow-y-auto px-3 pt-1'
-									: ''}"
-						>
-							{#if activeTab === 'materialGraph' && materialGraph}
-								<MaterialGraphView snapshot={materialGraph} />
-							{:else if activeTab === 'overview'}
-								<Overview
-									{history}
-									onNodeClick={(e) => {
-										const node = e.node;
-										showMessage(node.data.message, true);
-									}}
-									onClose={() => showControls.set(false)}
-								/>
-							{:else if activeTab === 'files' && $selectedTerminalId}
-								<FileNav onAttach={handleTerminalAttach} {chatId} />
-							{:else if activeTab === 'files' && codeInterpreterEnabled}
-								<PyodideFileNav />
-							{:else}
-								<Controls embed={true} {models} bind:chatFiles bind:params />
+							{/if}
+							{#if showOverviewTab}
+								<button
+									class="studio-tab {activeTab === 'overview' ? 'active' : ''}"
+									on:click={() => (activeTab = 'overview')}
+								>
+									概述
+								</button>
 							{/if}
 						</div>
+						<button
+							class="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
+							on:click={() => showControls.set(false)}
+							aria-label={$i18n.t('Close')}
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.5"
+								class="size-4"
+							>
+								<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+							</svg>
+						</button>
 					</div>
-				{/if}
+
+					<div class="flex-1 min-h-0">
+						{#if activeTab === 'materialGraph'}
+							<StudioGraphPanel workflow={materialGraph} knowledge={knowledgeGraph} />
+						{:else if activeTab === 'overview'}
+							<Overview
+								{history}
+								onNodeClick={(e) => {
+									const node = e.node;
+									showMessage(node.data.message, true);
+								}}
+								onClose={() => showControls.set(false)}
+							/>
+						{/if}
+					</div>
+				</div>
 			</div>
 		</Drawer>
 	{/if}
@@ -436,125 +263,100 @@
 		{#if $showControls}
 			<div class="flex max-h-full min-h-full">
 				<div
-					class="w-full {specialPanel && !$showCallOverlay
-						? ' '
-						: 'bg-white dark:shadow-lg dark:bg-gray-850'} z-40 pointer-events-auto {activeTab ===
-					'files'
-						? ''
-						: 'overflow-y-auto'} scrollbar-hidden"
+					class="w-full bg-white dark:shadow-lg dark:bg-gray-850 z-40 pointer-events-auto overflow-hidden scrollbar-hidden"
 					id="controls-container"
 				>
-					{#if $showCallOverlay}
-						<div class="w-full h-full flex justify-center">
-							<CallOverlay
-								bind:files
-								{submitPrompt}
-								{stopResponse}
-								{modelId}
-								{chatId}
-								{eventTarget}
-								on:close={() => showControls.set(false)}
-							/>
-						</div>
-					{:else if $showEmbeds}
-						<Embeds overlay={dragged} />
-					{:else if $showArtifacts}
-						<Artifacts {history} overlay={dragged} />
-					{:else}
-						<!-- Controls + Files tabs -->
-						<div class="flex flex-col h-full min-h-0">
-							<!-- Tab bar -->
-							<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
-								<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
-									{#if showControlsTab}
-										<button
-											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-											'controls'
-												? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white'
-												: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
-											on:click={() => (activeTab = 'controls')}
-										>
-											{$i18n.t('Controls')}
-										</button>
-									{/if}
-									{#if showFilesTab}
-										<button
-											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-											'files'
-												? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white'
-												: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
-											on:click={() => (activeTab = 'files')}
-										>
-											{$i18n.t('Files')}
-										</button>
-									{/if}
-									{#if showMaterialGraphTab}
-									<button class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab === 'materialGraph' ? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}" on:click={() => (activeTab = 'materialGraph')}>Graph</button>
-								{/if}								{#if showOverviewTab}
-										<button
-											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-											'overview'
-												? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white'
-												: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
-											on:click={() => (activeTab = 'overview')}
-										>
-											{$i18n.t('Overview')}
-										</button>
-									{/if}
-								</div>
-								<button
-									class="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-									on:click={() => showControls.set(false)}
-									aria-label={$i18n.t('Close')}
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="1.5"
-										class="size-4"
+					<!-- Material Graph Studio: workflow + truthful knowledge signal -->
+					<div class="flex flex-col h-full min-h-0">
+						<!-- Tab bar -->
+						<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
+							<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
+								{#if showMaterialGraphTab}
+									<button
+										class="studio-tab {activeTab === 'materialGraph' ? 'active' : ''}"
+										on:click={() => (activeTab = 'materialGraph')}>运行图谱</button
 									>
-										<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-									</svg>
-								</button>
-							</div>
-
-							<div
-								class="flex-1 min-h-0 {activeTab === 'overview'
-									? 'h-full'
-									: activeTab === 'controls'
-										? 'overflow-y-auto px-3 pt-1'
-										: ''}"
-							>
-								{#if activeTab === 'materialGraph' && materialGraph}
-									<MaterialGraphView snapshot={materialGraph} />
-								{:else if activeTab === 'overview'}
-									<Overview
-										{history}
-										onNodeClick={(e) => {
-											const node = e.node;
-											if (node?.data?.message?.favorite) {
-												history.messages[node.data.message.id].favorite = true;
-											} else {
-												history.messages[node.data.message.id].favorite = null;
-											}
-											showMessage(node.data.message, true);
-										}}
-										onClose={() => showControls.set(false)}
-									/>
-								{:else if activeTab === 'files' && $selectedTerminalId}
-									<FileNav onAttach={handleTerminalAttach} overlay={dragged} {chatId} />
-								{:else if activeTab === 'files' && codeInterpreterEnabled}
-									<PyodideFileNav overlay={dragged} />
-								{:else}
-									<Controls embed={true} {models} bind:chatFiles bind:params />
+								{/if}
+								{#if showOverviewTab}
+									<button
+										class="studio-tab {activeTab === 'overview' ? 'active' : ''}"
+										on:click={() => (activeTab = 'overview')}
+									>
+										概述
+									</button>
 								{/if}
 							</div>
+							<button
+								class="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
+								on:click={() => showControls.set(false)}
+								aria-label={$i18n.t('Close')}
+							>
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.5"
+									class="size-4"
+								>
+									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+								</svg>
+							</button>
 						</div>
-					{/if}
+
+						<div class="flex-1 min-h-0">
+							{#if activeTab === 'materialGraph'}
+								<StudioGraphPanel workflow={materialGraph} knowledge={knowledgeGraph} />
+							{:else if activeTab === 'overview'}
+								<Overview
+									{history}
+									onNodeClick={(e) => {
+										const node = e.node;
+										if (node?.data?.message?.favorite) {
+											history.messages[node.data.message.id].favorite = true;
+										} else {
+											history.messages[node.data.message.id].favorite = null;
+										}
+										showMessage(node.data.message, true);
+									}}
+									onClose={() => showControls.set(false)}
+								/>
+							{/if}
+						</div>
+					</div>
 				</div>
 			</div>
 		{/if}
 	</Pane>
 {/if}
+
+<style>
+	.studio-tab {
+		border: 1px solid transparent;
+		border-radius: 10px;
+		padding: 5px 10px;
+		color: rgb(107 114 128);
+		font-size: 12px;
+		transition: 160ms ease;
+		white-space: nowrap;
+	}
+	.studio-tab:hover {
+		background: rgb(248 250 249);
+		color: rgb(31 41 55);
+	}
+	.studio-tab.active {
+		border-color: rgb(207 226 218);
+		background: rgb(239 248 243);
+		color: rgb(31 86 67);
+		font-weight: 600;
+	}
+	:global(.dark) .studio-tab:hover {
+		background: rgb(31 41 55);
+		color: rgb(229 231 235);
+	}
+	:global(.dark) .studio-tab.active {
+		border-color: rgb(52 91 76);
+		background: rgb(23 55 43);
+		color: rgb(190 235 213);
+	}
+</style>

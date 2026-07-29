@@ -13,6 +13,7 @@
 	import { layoutWorkflow } from './layout';
 	import MaterialGraphNode from './Node.svelte';
 	export let snapshot: MaterialGraphSnapshot;
+	export let compact = false;
 	let selectedNodeId: string | null = null;
 	const nodes = writable<any[]>([]),
 		edges = writable<any[]>([]);
@@ -49,13 +50,14 @@
 
 <SvelteFlowProvider
 	><div
-		class="flex h-full min-h-0 flex-col bg-white dark:bg-gray-850"
+		class:compact
+		class="material-graph-view flex h-full min-h-0 flex-col bg-white dark:bg-gray-850"
 		data-terminal-outcome={snapshot?.outcome ?? ''}
 	>
 		<header class="shrink-0 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
 			<div class="flex items-center justify-between gap-3">
 				<div>
-					<h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Material Graph</h2>
+					<h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">执行流程</h2>
 					<p
 						class:!text-red-600={snapshot?.done && snapshot?.success === false}
 						class="mt-0.5 text-xs text-gray-500"
@@ -69,7 +71,7 @@
 				</div>
 			</div>
 		</header>
-		<div class="min-h-[300px] flex-1">
+		<div class="workflow-canvas min-h-[220px] flex-1">
 			<SvelteFlow
 				{nodes}
 				{edges}
@@ -86,7 +88,7 @@
 			>
 		</div>
 		<div
-			class="max-h-[34%] shrink-0 overflow-y-auto border-t border-gray-100 px-4 py-3 dark:border-gray-800"
+			class="workflow-logs max-h-[34%] shrink-0 overflow-y-auto border-t border-gray-100 px-4 py-3 dark:border-gray-800"
 		>
 			{#if selectedNode}<div class="mb-3">
 					<div class="text-xs font-medium text-gray-900 dark:text-gray-100">
@@ -110,3 +112,22 @@
 		</div>
 	</div></SvelteFlowProvider
 >
+
+<style>
+	.material-graph-view.compact header {
+		padding: 10px 12px;
+	}
+	.material-graph-view.compact header h2 {
+		font-size: 12px;
+	}
+	.material-graph-view.compact .workflow-canvas {
+		min-height: 170px;
+	}
+	.material-graph-view.compact .workflow-logs {
+		max-height: 24%;
+		padding: 7px 12px;
+	}
+	.material-graph-view.compact .workflow-logs > div {
+		font-size: 10px;
+	}
+</style>
