@@ -38,9 +38,14 @@
 		if (Object.keys(errors).length) return;
 		submitting = true;
 		try {
-			await resumeRun(form, serializeValues(fields, values), onResumeEvent);
-			onResumeEvent({ status: { ...form, resolved: true } as any });
-			submitted = true;
+			const result = await resumeRun(form, serializeValues(fields, values), onResumeEvent);
+			if (result.advanced) {
+				onResumeEvent({ status: { ...form, resolved: true } as any });
+				submitted = true;
+			} else {
+				errors = { ...errors, ...(result.fieldErrors ?? {}) };
+				error = result.message ?? '运行仍在等待这组信息，请检查后重试。';
+			}
 		} catch (reason) {
 			error = reason instanceof Error ? reason.message : String(reason);
 		} finally {
@@ -91,7 +96,7 @@
 									>{optionLabel(option)}</option
 								>{/each}</select
 						>
-					{:else if field.type === 'textarea'}
+					{:else if field.type === 'textarea' || field.type === 'object'}
 						<textarea
 							bind:value={values[key]}
 							placeholder={field.placeholder ?? ''}

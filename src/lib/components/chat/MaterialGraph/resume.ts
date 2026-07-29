@@ -1,19 +1,344 @@
-import type { AssistantFormDefinition, ResumeEvent } from './types';
+import type {
+	AssistantFormDefinition,
+	MaterialGraphSnapshot,
+	ResumeEvent,
+	ResumeResult
+} from './types';
+
+type JsonRecord = Record<string, any>;
+type ResumeTracker = ResumeResult & {
+	baselineCurrentNode: string | null;
+	baselineGraphVersion?: number;
+	baselineCheckpointId: string | null;
+	originalFormKey: string;
+	sawGraph: boolean;
+	activeFormKey?: string;
+};
+
 const unavailable = new Set([404, 405, 501]);
+const failureOutcomes = new Set([
+	'failed',
+	'failure',
+	'error',
+	'blocked',
+	'budget_stopped',
+	'budget_exceeded',
+	'rejected',
+	'cancelled',
+	'canceled'
+]);
+const graphEvents = new Set(['graph', 'graph_snapshot', 'graph_delta', 'terminal']);
+const isRecord = (value: unknown): value is JsonRecord =>
+	Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const normalized = (value: unknown) =>
+	typeof value === 'string' ? value.trim().toLowerCase().replaceAll('-', '_') : '';
+const textValue = (...values: unknown[]) =>
+	values.find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+const integerValue = (...values: unknown[]) =>
+	values.find((value): value is number => Number.isInteger(value) && typeof value === 'number');
+const formKey = (runId: string, checkpointId: unknown, formId: unknown) =>
+	[runId, checkpointId ?? 'checkpoint', formId ?? 'form'].join(':');
+
+/** One resume attempt per authoritative input checkpoint. */
 export const resumeKey = (form: AssistantFormDefinition) =>
-	[form.run_id, form.checkpoint_id ?? 'checkpoint', form.form_id].join(':');
+	formKey(form.run_id, form.checkpoint_id, form.form_id);
+
 const absolute = (base: string, path: string) =>
 	/^https?:\/\//.test(path)
 		? path
 		: `${base.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
+
+const trackerFor = (form: AssistantFormDefinition, streamed: boolean): ResumeTracker => ({
+	streamed,
+	authoritative: false,
+	advanced: false,
+	awaitingInput: true,
+	terminal: false,
+	status: normalized(form.status) || 'awaiting_input',
+	outcome: normalized(form.outcome) || undefined,
+	current_node: form.current_node ?? (String((form as JsonRecord).node_id ?? '') || null),
+	graph_version: form.graph_version,
+	checkpoint_id: form.checkpoint_id ?? null,
+	form_id: form.form_id,
+	baselineCurrentNode: form.current_node ?? (String((form as JsonRecord).node_id ?? '') || null),
+	baselineGraphVersion: form.graph_version,
+	baselineCheckpointId: form.checkpoint_id ?? null,
+	originalFormKey: formKey(form.run_id, form.checkpoint_id, form.form_id),
+	sawGraph: false
+});
+
+const unwrap = (raw: JsonRecord) => {
+	const envelope = isRecord(raw.event) ? raw.event : undefined;
+	return envelope?.type === 'status' && isRecord(envelope.data) ? envelope.data : raw;
+};
+
+const eventType = (raw: JsonRecord, payload: JsonRecord) =>
+	normalized(raw.event_type ?? raw.type ?? payload.event_type ?? payload.type ?? raw.event?.type);
+
+const eventRunId = (raw: JsonRecord, payload: JsonRecord) =>
+	textValue(
+		payload.run_id,
+		payload.runId,
+		raw.run_id,
+		raw.runId,
+		isRecord(raw.form) ? raw.form.run_id : undefined,
+		isRecord(raw.form) ? raw.form.runId : undefined,
+		isRecord(payload.form) ? payload.form.run_id : undefined,
+		isRecord(payload.form) ? payload.form.runId : undefined,
+		isRecord(raw.state) ? raw.state.run_id : undefined,
+		isRecord(payload.state) ? payload.state.run_id : undefined
+	);
+
+const formFrom = (raw: JsonRecord, payload: JsonRecord, type: string) => {
+	if (payload.action === 'assistant_form') return payload;
+	if (isRecord(raw.form)) return raw.form;
+	if (isRecord(payload.form)) return payload.form;
+	return ['assistant_form', 'assistantform', 'form'].includes(type) ? payload : undefined;
+};
+
+const graphFrom = (raw: JsonRecord, payload: JsonRecord, type: string) => {
+	if (payload.action === 'material_graph') return payload;
+	if (raw.action === 'material_graph') return raw;
+	return graphEvents.has(type) || type === 'done' || type === 'error' ? payload : undefined;
+};
+
+const validationMessage = (form: JsonRecord, raw: JsonRecord) => {
+	const context = isRecord(form.context) ? form.context : {};
+	const message = textValue(
+		form.validation_error,
+		form.validationError,
+		context.validation_error,
+		context.validationError,
+		context.error,
+		form.error,
+		raw.validation_error
+	);
+	return message?.trim();
+};
+
+const observe = (
+	tracker: ResumeTracker,
+	raw: JsonRecord,
+	payload: JsonRecord,
+	form: JsonRecord | undefined,
+	graph: JsonRecord | undefined,
+	type: string,
+	authoritative: boolean
+) => {
+	const state = isRecord(raw.state)
+		? raw.state
+		: isRecord(payload.state)
+			? payload.state
+			: undefined;
+	const patch = isRecord(graph?.patch) ? graph.patch : undefined;
+	const set = isRecord(patch?.set) ? patch.set : undefined;
+	const status = normalized(
+		textValue(state?.status, set?.status, form?.status, graph?.status, payload.status, raw.status)
+	);
+	const outcome = normalized(
+		textValue(state?.status, graph?.outcome, payload.outcome, raw.outcome, status)
+	);
+	const currentNode = textValue(
+		state?.current_node,
+		set?.current_node,
+		graph?.current_node,
+		payload.current_node,
+		raw.current_node
+	);
+	const graphVersion = integerValue(graph?.graph_version, payload.graph_version, raw.graph_version);
+	const checkpointId = textValue(
+		form?.checkpoint_id,
+		state?.checkpoint_id,
+		set?.checkpoint_id,
+		graph?.checkpoint_id,
+		payload.checkpoint_id,
+		raw.checkpoint_id
+	);
+
+	if (form && authoritative) {
+		tracker.authoritative = true;
+		tracker.status = status || 'awaiting_input';
+		tracker.outcome = outcome || undefined;
+		tracker.awaitingInput = (status || outcome || 'awaiting_input') === 'awaiting_input';
+		tracker.form_id = textValue(form.form_id, form.formId, form.id) ?? null;
+		tracker.checkpoint_id = checkpointId ?? tracker.checkpoint_id;
+		tracker.activeFormKey = formKey(
+			textValue(form.run_id, form.runId) ?? eventRunId(raw, payload) ?? '',
+			tracker.checkpoint_id,
+			tracker.form_id
+		);
+		tracker.message = validationMessage(form, raw) ?? tracker.message;
+	}
+
+	if (graph && authoritative) {
+		tracker.authoritative = true;
+		tracker.sawGraph = tracker.sawGraph || graphEvents.has(type) || type === 'done';
+		if (status) tracker.status = status;
+		if (outcome) tracker.outcome = outcome;
+		if (status || outcome) tracker.awaitingInput = (status || outcome) === 'awaiting_input';
+		if (currentNode !== undefined) tracker.current_node = currentNode;
+		if (graphVersion !== undefined) tracker.graph_version = graphVersion;
+		if (checkpointId !== undefined) tracker.checkpoint_id = checkpointId;
+		tracker.terminal =
+			tracker.terminal ||
+			type === 'terminal' ||
+			type === 'done' ||
+			type === 'error' ||
+			Boolean(graph.done);
+	}
+
+	const error = textValue(raw.error, payload.error, graph?.error, state?.error);
+	const failure =
+		failureOutcomes.has(outcome) ||
+		failureOutcomes.has(status) ||
+		type === 'error' ||
+		(type === 'terminal' &&
+			(graph?.success === false || payload.success === false || raw.success === false));
+	if (error || failure) {
+		throw new Error(error?.trim() || `恢复流程失败：${outcome || status || 'error'}`);
+	}
+};
+
+const statusEvent = (
+	raw: JsonRecord,
+	payload: JsonRecord,
+	form: JsonRecord | undefined,
+	graph: JsonRecord | undefined,
+	runId: string
+): ResumeEvent['status'] => {
+	if (form) {
+		return {
+			...form,
+			action: 'assistant_form',
+			run_id: textValue(form.run_id, form.runId, runId) ?? runId,
+			form_id: textValue(form.form_id, form.formId, form.id) ?? 'input'
+		} as AssistantFormDefinition;
+	}
+	if (graph) {
+		return {
+			...graph,
+			action: 'material_graph',
+			run_id: eventRunId(raw, payload) ?? runId,
+			nodes: Array.isArray(graph.nodes) ? graph.nodes : [],
+			edges: Array.isArray(graph.edges) ? graph.edges : []
+		} as MaterialGraphSnapshot;
+	}
+	return undefined;
+};
+
+const finish = (tracker: ResumeTracker): ResumeResult => {
+	const changedNode =
+		tracker.current_node !== undefined && tracker.current_node !== tracker.baselineCurrentNode;
+	const changedVersion =
+		tracker.graph_version !== undefined &&
+		(tracker.baselineGraphVersion === undefined
+			? tracker.sawGraph
+			: tracker.graph_version > tracker.baselineGraphVersion);
+	const changedForm =
+		tracker.activeFormKey !== undefined && tracker.activeFormKey !== tracker.originalFormKey;
+	const changedCheckpoint =
+		tracker.checkpoint_id !== undefined && tracker.checkpoint_id !== tracker.baselineCheckpointId;
+	const completedOrReview = ['complete', 'completed', 'awaiting_review'].includes(
+		tracker.status || tracker.outcome || ''
+	);
+	const leftInput =
+		tracker.authoritative && Boolean(tracker.status) && tracker.status !== 'awaiting_input';
+	tracker.advanced = Boolean(
+		tracker.authoritative &&
+		// A graph-version bump alone can be a heartbeat/log update while the
+		// very same input checkpoint is still pending. It must never hide the
+		// form. A version is only supporting evidence after the authoritative
+		// status has left awaiting_input; the state transition itself is what
+		// resolves the original form.
+		(changedNode ||
+			changedCheckpoint ||
+			changedForm ||
+			completedOrReview ||
+			leftInput ||
+			(changedVersion && !tracker.awaitingInput))
+	);
+
+	// A repeated form for the same checkpoint is authoritative, but it is not
+	// progress. Keep the original form visible so the user can correct it.
+	if (
+		!tracker.advanced &&
+		tracker.awaitingInput &&
+		tracker.activeFormKey === tracker.originalFormKey
+	) {
+		tracker.message ??= '提交已接收，但运行仍在等待这组信息，请检查填写内容后重试。';
+	}
+	if (!tracker.authoritative)
+		tracker.message ??= '恢复请求没有返回权威运行状态，表单已保留，请重试。';
+
+	const {
+		baselineCurrentNode: _baselineCurrentNode,
+		baselineGraphVersion: _baselineGraphVersion,
+		baselineCheckpointId: _baselineCheckpointId,
+		originalFormKey: _originalFormKey,
+		sawGraph: _sawGraph,
+		activeFormKey: _activeFormKey,
+		...result
+	} = tracker;
+	return result;
+};
+
+const consumeFrame = (
+	data: string,
+	runId: string,
+	tracker: ResumeTracker,
+	emit: (event: ResumeEvent) => void,
+	sseType?: string
+) => {
+	if (!data || data === '[DONE]') return;
+	let raw: JsonRecord;
+	try {
+		raw = JSON.parse(data);
+	} catch {
+		throw new Error('恢复流返回了无法解析的 SSE 事件');
+	}
+	if (sseType && !raw.event_type && !raw.type) raw.event_type = sseType;
+	if (!isRecord(raw)) throw new Error('恢复流返回了无效的 SSE 事件');
+	const payload = unwrap(raw);
+	const type = eventType(raw, payload);
+	const eventRun = eventRunId(raw, payload);
+	if (eventRun && eventRun !== runId) throw new Error('恢复流返回了不匹配的 run_id');
+	const form = formFrom(raw, payload, type);
+	const graph = graphFrom(raw, payload, type);
+	const embeddedFormRun = form ? textValue(form.run_id, form.runId) : undefined;
+	const embeddedGraphRun = graph ? textValue(graph.run_id, graph.runId) : undefined;
+	if (embeddedFormRun && embeddedFormRun !== runId) throw new Error('恢复流表单的 run_id 不匹配');
+	if (embeddedGraphRun && embeddedGraphRun !== runId)
+		throw new Error('恢复流图状态的 run_id 不匹配');
+	const authoritative = eventRun === runId;
+	if (form && authoritative) {
+		const incomingFormId = textValue(form.form_id, form.formId, form.id);
+		const incomingCheckpointId = textValue(form.checkpoint_id, form.checkpointId);
+		if (!incomingFormId || !incomingCheckpointId)
+			throw new Error('恢复流表单缺少 form_id 或 checkpoint_id');
+	}
+	const token = textValue(
+		raw.delta,
+		raw.token,
+		payload.delta,
+		payload.token,
+		['token', 'assistant_token', 'text_delta', 'assistant_delta'].includes(type)
+			? payload.text
+			: undefined
+	);
+	observe(tracker, raw, payload, form, graph, type, authoritative);
+	const status = authoritative ? statusEvent(raw, payload, form, graph, runId) : undefined;
+	if (token || status) emit({ token, status, raw });
+};
+
 export const parseSse = async (
 	response: Response,
-	runId: string,
+	form: AssistantFormDefinition,
 	emit: (event: ResumeEvent) => void
-) => {
-	if (!response.body) return;
-	const reader = response.body.getReader(),
-		decoder = new TextDecoder();
+): Promise<ResumeResult> => {
+	const tracker = trackerFor(form, true);
+	if (!response.body) return finish(tracker);
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
 	let buffer = '';
 	while (true) {
 		const { done, value } = await reader.read();
@@ -26,30 +351,41 @@ export const parseSse = async (
 				.filter((line) => line.startsWith('data:'))
 				.map((line) => line.slice(5).trim())
 				.join('\n');
-			if (!data || data === '[DONE]') continue;
-			const raw = JSON.parse(data),
-				status = raw?.event?.type === 'status' ? raw.event.data : raw?.status;
-			const eventRun = status?.run_id ?? status?.runId ?? raw?.run_id;
-			if (eventRun && eventRun !== runId) throw new Error('恢复流返回了不匹配的 run_id');
-			const token =
-				raw?.delta ??
-				raw?.token ??
-				(['token', 'assistant_token', 'text_delta'].includes(raw?.event?.type)
-					? raw.event?.data?.text
-					: undefined);
-			emit({ token, status, raw });
+			const sseType = chunk
+				.split(/\r?\n/)
+				.find((line) => line.startsWith('event:'))
+				?.slice(6)
+				.trim();
+			consumeFrame(data, form.run_id, tracker, emit, sseType);
 		}
 		if (done) break;
 	}
+	if (buffer.trim()) {
+		const data = buffer
+			.split(/\r?\n/)
+			.filter((line) => line.startsWith('data:'))
+			.map((line) => line.slice(5).trim())
+			.join('\n');
+		const sseType = buffer
+			.split(/\r?\n/)
+			.find((line) => line.startsWith('event:'))
+			?.slice(6)
+			.trim();
+		consumeFrame(data, form.run_id, tracker, emit, sseType);
+	}
+	return finish(tracker);
 };
+
 export const resumeRun = async (
 	form: AssistantFormDefinition,
 	values: Record<string, unknown>,
 	emit: (event: ResumeEvent) => void,
 	fetcher: typeof fetch = fetch
-) => {
-	const base = form.endpoint ?? '',
-		legacy = form.submit?.url ?? form.submit?.path ?? `/runs/${form.run_id}/resume`;
+): Promise<ResumeResult> => {
+	if (!form.run_id || !form.form_id || !form.checkpoint_id)
+		throw new Error('当前表单缺少 run_id、checkpoint_id 或 form_id，无法安全恢复');
+	const base = form.endpoint ?? '';
+	const legacy = form.submit?.url ?? form.submit?.path ?? `/runs/${form.run_id}/resume`;
 	if (!base && !/^https?:\/\//.test(legacy)) throw new Error('未配置 Material Graph API 地址');
 	const stream =
 		form.submit?.stream_path ??
@@ -58,30 +394,45 @@ export const resumeRun = async (
 		...(form.submission ?? {}),
 		values,
 		run_id: form.run_id,
-		checkpoint_id: form.checkpoint_id
+		form_id: form.form_id,
+		checkpoint_id: form.checkpoint_id ?? null
 	});
-	const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': resumeKey(form) };
+	const headers = {
+		'Content-Type': 'application/json',
+		Accept: 'text/event-stream',
+		'Idempotency-Key': resumeKey(form)
+	};
 	const response = await fetcher(absolute(base, stream), {
 		method: form.submit?.method ?? 'POST',
 		headers,
 		body
 	});
-	if (response.ok) {
-		await parseSse(response, form.run_id, emit);
-		return { streamed: true };
-	}
+	if (response.ok) return parseSse(response, form, emit);
 	if (!unavailable.has(response.status))
 		throw new Error((await response.json().catch(() => null))?.detail ?? `HTTP ${response.status}`);
+
 	const fallback = await fetcher(absolute(base, legacy), {
 		method: form.submit?.method ?? 'POST',
-		headers,
+		headers: { ...headers, Accept: 'application/json' },
 		body
 	});
 	if (!fallback.ok)
 		throw new Error((await fallback.json().catch(() => null))?.detail ?? `HTTP ${fallback.status}`);
-	const result = await fallback.json().catch(() => null),
-		resultRun = result?.run_id ?? result?.runId;
+	const result = await fallback.json().catch(() => null);
+	const resultRun =
+		result?.run_id ?? result?.runId ?? result?.state?.run_id ?? result?.state?.runId;
 	if (resultRun && resultRun !== form.run_id) throw new Error('恢复响应返回了不匹配的 run_id');
-	if (result?.status) emit({ status: result.status, raw: result });
-	return { streamed: false };
+	const tracker = trackerFor(form, false);
+	if (isRecord(result?.state) && resultRun === form.run_id) {
+		const state = {
+			...result.state,
+			action: 'material_graph',
+			event_type: 'graph_snapshot',
+			run_id: form.run_id,
+			status: result.status ?? result.state.status
+		};
+		emit({ status: state as MaterialGraphSnapshot, raw: result });
+		observe(tracker, state, state, undefined, state, 'graph_snapshot', true);
+	}
+	return finish(tracker);
 };

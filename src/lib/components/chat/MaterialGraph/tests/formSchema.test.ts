@@ -37,4 +37,36 @@ describe('JSON Schema forms', () => {
 		});
 		expect(serializeValues(fields, { ...values, temperature: '12' }).temperature).toBe(12);
 	});
+	it('validates and serializes object fields as JSON', () => {
+		const fields: any[] = [{ name: 'metadata', type: 'object' }];
+		expect(validateValues(fields, { metadata: '{broken' })).toEqual({
+			metadata: 'metadata必须是有效的 JSON 对象'
+		});
+		expect(serializeValues(fields, { metadata: '{"batch": 3}' })).toEqual({
+			metadata: { batch: 3 }
+		});
+		expect(
+			initialValues({ ...form, defaults: { metadata: { source: 'operator' } } }, fields).metadata
+		).toBe('{\n  "source": "operator"\n}');
+	});
+	it('keeps natural-language objectives as textarea text instead of object JSON', () => {
+		const fields = normalizeFields({
+			...form,
+			schema: {
+				type: 'object',
+				required: ['objective_text'],
+				properties: {
+					objective_text: {
+						type: 'string',
+						title: '研发目标',
+						format: 'textarea'
+					}
+				}
+			}
+		});
+		expect(fields[0].type).toBe('textarea');
+		expect(serializeValues(fields, { objective_text: '高 Tg，且低介电' })).toEqual({
+			objective_text: '高 Tg，且低介电'
+		});
+	});
 });

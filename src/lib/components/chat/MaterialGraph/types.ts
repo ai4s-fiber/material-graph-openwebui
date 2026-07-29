@@ -59,6 +59,7 @@ export interface MaterialGraphSnapshot {
 	workflow?: WorkflowDefinition;
 	workflow_definition?: WorkflowDefinition;
 	checkpoint_id?: string;
+	form_id?: string;
 	current_node?: string | null;
 	route_signal?: string | null;
 	nodes: MaterialGraphNode[];
@@ -96,6 +97,14 @@ export interface AssistantFormDefinition {
 	run_id: string;
 	contract_version?: string;
 	checkpoint_id?: string;
+	/** Authoritative status carried by a form event, when available. */
+	status?: MaterialGraphNodeStatus | string;
+	/** Current graph node/checkpoint metadata mirrored into the form event. */
+	current_node?: string | null;
+	graph_version?: number;
+	outcome?: string;
+	done?: boolean;
+	resolved?: boolean;
 	title?: string;
 	description?: string;
 	fields?: AssistantFormField[];
@@ -111,6 +120,27 @@ export type ResumeEvent = {
 	status?: MaterialGraphSnapshot | AssistantFormDefinition;
 	raw?: unknown;
 };
+
+/**
+ * Result of a resume request. `advanced` is deliberately separate from the
+ * HTTP/SSE transport succeeding: a stream can be healthy while the graph is
+ * still waiting for the same input checkpoint.
+ */
+export interface ResumeResult {
+	streamed: boolean;
+	authoritative: boolean;
+	advanced: boolean;
+	awaitingInput: boolean;
+	terminal: boolean;
+	status?: string;
+	outcome?: string;
+	current_node?: string | null;
+	graph_version?: number;
+	checkpoint_id?: string | null;
+	form_id?: string | null;
+	fieldErrors?: Record<string, string>;
+	message?: string;
+}
 export {
 	appendMaterialGraphStatus,
 	latestAssistantForm,

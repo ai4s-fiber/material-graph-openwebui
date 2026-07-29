@@ -168,13 +168,31 @@ export const materialGraphTopologyKey = (snapshot?: MaterialGraphSnapshot | null
 		edges: (snapshot?.edges ?? []).map((edge) => [edge.source, edge.target, edge.kind ?? ''])
 	});
 
+const assistantFormIdentity = (event: any) => {
+	if (event?.action !== 'assistant_form') return null;
+	return [event.run_id ?? '', event.checkpoint_id ?? 'checkpoint', event.form_id ?? 'form'].join(
+		':'
+	);
+};
+
 export const appendMaterialGraphStatus = (
 	history: any[] = [],
 	event: any,
 	limit = MATERIAL_GRAPH_STATUS_HISTORY_LIMIT
 ) => {
 	const boundedLimit = Math.max(16, limit);
-	const next = [...history, event];
+	const identity = assistantFormIdentity(event);
+	let next = [...history];
+	if (identity) {
+		const existingIndex = next.findIndex((item) => assistantFormIdentity(item) === identity);
+		if (existingIndex >= 0) {
+			const previous = next[existingIndex];
+			// A stale replay must never resurrect a form already resolved by a
+			// later authoritative graph event.
+			if (previous?.resolved && !event?.resolved) return next;
+			next[existingIndex] = { ...previous, ...event };
+		} else next.push(event);
+	} else next.push(event);
 	if (next.length <= boundedLimit) return next;
 	const graph = reduceMaterialGraph(next);
 	const nonGraph = next
@@ -200,8 +218,9 @@ export const latestMaterialGraph = (history: any): MaterialGraphSnapshot | null 
 };
 
 export const latestAssistantForm = (statusHistory: any[] = []): AssistantFormDefinition | null => {
-	for (let index = statusHistory.length - 1; index >= 0; index--)
-		if (statusHistory[index]?.action === 'assistant_form')
-			return statusHistory[index]?.resolved ? null : statusHistory[index];
+	for (let index = statusHistory.length - 1; index >= 0; index--) {
+		const form = statusHistory[index];
+		if (form?.action === 'assistant_form' && !form.resolved) return form;
+	}
 	return null;
 };

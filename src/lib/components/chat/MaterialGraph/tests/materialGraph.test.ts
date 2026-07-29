@@ -55,6 +55,29 @@ describe('Material Graph contracts', () => {
 			])?.form_id
 		).toBe('new');
 	});
+	it('keeps a replacement form visible after the prior checkpoint is resolved', () => {
+		let history: any[] = [];
+		history = appendMaterialGraphStatus(history, {
+			action: 'assistant_form',
+			run_id: 'r',
+			checkpoint_id: 'cp-1',
+			form_id: 'first'
+		});
+		history = appendMaterialGraphStatus(history, {
+			action: 'assistant_form',
+			run_id: 'r',
+			checkpoint_id: 'cp-2',
+			form_id: 'second'
+		});
+		history = appendMaterialGraphStatus(history, {
+			action: 'assistant_form',
+			run_id: 'r',
+			checkpoint_id: 'cp-1',
+			form_id: 'first',
+			resolved: true
+		});
+		expect(latestAssistantForm(history)?.form_id).toBe('second');
+	});
 	it('reconstructs versioned snapshot and delta events', () => {
 		const graph = reduceMaterialGraph([
 			{
