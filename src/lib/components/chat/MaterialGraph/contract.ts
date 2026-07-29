@@ -224,3 +224,38 @@ export const latestAssistantForm = (statusHistory: any[] = []): AssistantFormDef
 	}
 	return null;
 };
+
+export type MaterialGraphResumeMerge = {
+	message: any;
+	/** Persist only after the original checkpoint has been authoritatively resolved. */
+	persist: boolean;
+};
+
+/**
+ * Merge resume-stream events into the message owned by the chat history.
+ *
+ * ResponseMessage keeps a local clone for rendering, but Chat.svelte treats
+ * history.messages as canonical and can refresh that clone while the original
+ * pipe stream is winding down. Updating only the clone therefore loses the
+ * replacement human-review form. This helper performs one canonical assignment
+ * per resume event so a later render always starts from the merged history.
+ */
+export const mergeMaterialGraphResumeEvent = (
+	history: any,
+	messageId: string,
+	event: any
+): MaterialGraphResumeMerge | null => {
+	const current = history?.messages?.[messageId];
+	if (!current) return null;
+
+	const next = { ...current };
+	if (event?.token) next.content = `${current.content ?? ''}${event.token}`;
+	if (event?.status)
+		next.statusHistory = appendMaterialGraphStatus(current.statusHistory ?? [], event.status);
+
+	history.messages[messageId] = next;
+	return {
+		message: next,
+		persist: Boolean(event?.status?.action === 'assistant_form' && event.status.resolved === true)
+	};
+};

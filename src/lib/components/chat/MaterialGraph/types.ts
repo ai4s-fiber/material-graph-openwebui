@@ -199,6 +199,7 @@ export interface ResumeResult {
 export {
 	appendMaterialGraphStatus,
 	latestAssistantForm,
+	mergeMaterialGraphResumeEvent,
 	latestMaterialGraph,
 	materialGraphTopologyKey
 } from './contract';

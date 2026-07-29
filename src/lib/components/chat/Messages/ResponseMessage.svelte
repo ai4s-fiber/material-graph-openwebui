@@ -63,7 +63,7 @@
 	import RegenerateMenu from './ResponseMessage/RegenerateMenu.svelte';
 	import StatusHistory from './ResponseMessage/StatusHistory.svelte';
 	import AssistantForm from './ResponseMessage/AssistantForm.svelte';
-	import { appendMaterialGraphStatus, latestAssistantForm } from '../MaterialGraph/types';
+	import { latestAssistantForm, mergeMaterialGraphResumeEvent } from '../MaterialGraph/types';
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
@@ -180,13 +180,26 @@
 
 	$: statusEntries = message?.statusHistory ?? [...(message?.status ? [message?.status] : [])];
 	$: assistantForm = latestAssistantForm(message?.statusHistory ?? []);
+	let resumePersistence: Promise<void> | null = null;
+	const persistResolvedResume = (targetMessageId: string) => {
+		if (resumePersistence || typeof saveMessage !== 'function') return;
+		resumePersistence = (async () => {
+			await tick();
+			const canonical = history.messages?.[targetMessageId];
+			if (canonical) await saveMessage(targetMessageId, structuredClone(canonical));
+		})()
+			.catch((reason) => {
+				console.error('Failed to persist the resolved Material Graph checkpoint', reason);
+			})
+			.finally(() => {
+				resumePersistence = null;
+			});
+	};
 	const handleMaterialGraphResume = (resumeEvent: any) => {
-		if (resumeEvent?.token) message.content = `${message.content ?? ''}${resumeEvent.token}`;
-		if (resumeEvent?.status)
-			message.statusHistory = appendMaterialGraphStatus(
-				message.statusHistory ?? [],
-				resumeEvent.status
-			);
+		const merged = mergeMaterialGraphResumeEvent(history, messageId, resumeEvent);
+		if (!merged) return;
+		message = structuredClone(merged.message);
+		if (merged.persist) persistResolvedResume(messageId);
 	};
 	$: hasVisibleStatus =
 		(model?.info?.meta?.capabilities?.status_updates ?? true) &&

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	appendMaterialGraphStatus,
 	latestAssistantForm,
+	mergeMaterialGraphResumeEvent,
 	materialGraphTopologyKey,
 	reduceMaterialGraph,
 	outcomeLabel
@@ -77,6 +78,125 @@ describe('Material Graph contracts', () => {
 			resolved: true
 		});
 		expect(latestAssistantForm(history)?.form_id).toBe('second');
+	});
+	it('merges resume events into canonical history across a stale source race', () => {
+		const oldForm = {
+			action: 'assistant_form',
+			run_id: 'run-race',
+			checkpoint_id: 'cp-input',
+			form_id: 'task-spec:run-race',
+			status: 'awaiting_input'
+		};
+		const history: any = {
+			messages: {
+				assistant: {
+					id: 'assistant',
+					content: '',
+					statusHistory: [
+						{
+							action: 'material_graph',
+							event_type: 'graph_snapshot',
+							run_id: 'run-race',
+							graph_version: 1,
+							current_node: 'task_structure',
+							status: 'awaiting_input'
+						},
+						oldForm
+					]
+				}
+			}
+		};
+
+		const graphMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			status: {
+				action: 'material_graph',
+				event_type: 'graph_snapshot',
+				run_id: 'run-race',
+				graph_version: 2,
+				current_node: 'human_review',
+				status: 'awaiting_review'
+			}
+		});
+		const reviewMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			status: {
+				action: 'assistant_form',
+				run_id: 'run-race',
+				checkpoint_id: 'cp-review',
+				form_id: 'human-review:run-race',
+				status: 'awaiting_review'
+			}
+		});
+
+		// The original pipe finishes after the resume stream and contributes
+		// stale task-structure events to the same canonical message.
+		history.messages.assistant.statusHistory = appendMaterialGraphStatus(
+			history.messages.assistant.statusHistory,
+			{
+				action: 'material_graph',
+				event_type: 'terminal',
+				run_id: 'run-race',
+				graph_version: 3,
+				current_node: 'task_structure',
+				status: 'awaiting_input'
+			}
+		);
+		history.messages.assistant.statusHistory = appendMaterialGraphStatus(
+			history.messages.assistant.statusHistory,
+			oldForm
+		);
+
+		const resolvedMerge = mergeMaterialGraphResumeEvent(history, 'assistant', {
+			status: { ...oldForm, resolved: true }
+		});
+		// A clone refreshed from Chat.svelte's canonical source must retain the
+		// replacement form instead of reverting to the old intake checkpoint.
+		const refreshed = structuredClone(history.messages.assistant);
+		expect(latestAssistantForm(refreshed.statusHistory)?.form_id).toBe('human-review:run-race');
+		expect(graphMerge?.persist).toBe(false);
+		expect(reviewMerge?.persist).toBe(false);
+		expect(resolvedMerge?.persist).toBe(true);
+	});
+	it('requests persistence once, only when the original form is resolved', () => {
+		const history: any = {
+			messages: { assistant: { id: 'assistant', content: '', statusHistory: [] } }
+		};
+		const events = [
+			{ token: '方案已生成' },
+			{
+				status: {
+					action: 'material_graph',
+					run_id: 'run-persist',
+					current_node: 'human_review',
+					status: 'awaiting_review'
+				}
+			},
+			{
+				status: {
+					action: 'assistant_form',
+					run_id: 'run-persist',
+					checkpoint_id: 'cp-review',
+					form_id: 'human-review:run-persist'
+				}
+			},
+			{
+				status: {
+					action: 'assistant_form',
+					run_id: 'run-persist',
+					checkpoint_id: 'cp-input',
+					form_id: 'task-spec:run-persist',
+					resolved: true
+				}
+			}
+		];
+		const persistCount = events
+			.map((event) => mergeMaterialGraphResumeEvent(history, 'assistant', event))
+			.filter((result) => result?.persist).length;
+
+		expect(persistCount).toBe(1);
+		expect(history.messages.assistant.content).toBe('方案已生成');
+		expect(latestAssistantForm(history.messages.assistant.statusHistory)?.form_id).toBe(
+			'human-review:run-persist'
+		);
 	});
 	it('reconstructs versioned snapshot and delta events', () => {
 		const graph = reduceMaterialGraph([
