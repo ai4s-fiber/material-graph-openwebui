@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 IMAGE_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-image.yml'
 CI_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-ci.yml'
 FRONTEND_WORKFLOW = ROOT / '.github' / 'workflows' / 'frontend.yaml'
+VITE_CONFIG = ROOT / 'vite.config.ts'
 RELEASE_IMAGE = 'ghcr.io/ai4s-fiber/material-graph-openwebui-release'
 RELEASE_REPOSITORY = 'ai4s-fiber/material-graph-openwebui-release'
 
@@ -173,6 +174,13 @@ def test_frontend_format_gate_is_read_only_and_project_scoped() -> None:
     assert 'npm run i18n:parse' not in workflow
     assert 'git diff --exit-code' not in workflow
     assert 'npm run build' in workflow
+
+
+def test_production_frontend_source_maps_are_opt_in() -> None:
+    vite_config = _text(VITE_CONFIG)
+
+    assert "sourcemap: process.env.GENERATE_SOURCEMAP === 'true'" in vite_config
+    assert 'sourcemap: true' not in vite_config
 
 
 def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() -> None:

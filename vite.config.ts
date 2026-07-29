@@ -21,7 +21,9 @@ export default defineConfig({
 		APP_BUILD_HASH: JSON.stringify(process.env.APP_BUILD_HASH || 'dev-build')
 	},
 	build: {
-		sourcemap: true
+		// Production images must not expose application source through public
+		// static assets. Developers may opt in explicitly for local diagnostics.
+		sourcemap: process.env.GENERATE_SOURCEMAP === 'true'
 	},
 	worker: {
 		format: 'es'
