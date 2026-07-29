@@ -9,6 +9,7 @@ IMAGE_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-image.yml'
 CI_WORKFLOW = ROOT / '.github' / 'workflows' / 'material-graph-ci.yml'
 FRONTEND_WORKFLOW = ROOT / '.github' / 'workflows' / 'frontend.yaml'
 VITE_CONFIG = ROOT / 'vite.config.ts'
+PYODIDE_PREP = ROOT / 'scripts' / 'prepare-pyodide.js'
 RELEASE_IMAGE = 'ghcr.io/ai4s-fiber/material-graph-openwebui-release'
 RELEASE_REPOSITORY = 'ai4s-fiber/material-graph-openwebui-release'
 
@@ -181,6 +182,16 @@ def test_production_frontend_source_maps_are_opt_in() -> None:
 
     assert "sourcemap: process.env.GENERATE_SOURCEMAP === 'true'" in vite_config
     assert 'sourcemap: true' not in vite_config
+
+
+def test_pyodide_assets_do_not_publish_third_party_source_maps() -> None:
+    preparation = _text(PYODIDE_PREP)
+
+    assert "if (entry.endsWith('.map')) continue;" in preparation
+    assert 'const SOURCE_MAP_DIRECTIVE =' in preparation
+    assert r'\/\/[#@]\s*sourceMappingURL=' in preparation
+    assert "entry.endsWith('.js') || entry.endsWith('.mjs')" in preparation
+    assert "content.replace(SOURCE_MAP_DIRECTIVE, '\\n')" in preparation
 
 
 def test_release_blocks_high_vulnerabilities_and_keylessly_signs_the_digest() -> None:

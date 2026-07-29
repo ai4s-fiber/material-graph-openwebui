@@ -28,6 +28,8 @@ import { loadPyodide } from 'pyodide';
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import { writeFile, readFile, copyFile, readdir, rmdir, access } from 'fs/promises';
 
+const SOURCE_MAP_DIRECTIVE = /(?:\r?\n)?\/\/[#@]\s*sourceMappingURL=[^\r\n]*(?:\r?\n)*$/u;
+
 /**
  * Loading network proxy configurations from the environment variables.
  * And the proxy config with lowercase name has the highest priority to use.
@@ -118,9 +120,19 @@ async function downloadPackages() {
 
 async function copyPyodide() {
 	console.log('Copying Pyodide files into static directory');
-	// Copy all files from node_modules/pyodide to static/pyodide
+	// Copy runtime assets without publishing third-party source maps.
 	for await (const entry of await readdir('node_modules/pyodide')) {
-		await copyFile(`node_modules/pyodide/${entry}`, `static/pyodide/${entry}`);
+		if (entry.endsWith('.map')) continue;
+
+		const source = `node_modules/pyodide/${entry}`;
+		const destination = `static/pyodide/${entry}`;
+		if (entry.endsWith('.js') || entry.endsWith('.mjs')) {
+			const content = await readFile(source, 'utf8');
+			await writeFile(destination, content.replace(SOURCE_MAP_DIRECTIVE, '\n'));
+			continue;
+		}
+
+		await copyFile(source, destination);
 	}
 }
 
