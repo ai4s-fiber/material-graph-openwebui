@@ -44,6 +44,15 @@ FAILURE = {
     'cancelled',
     'canceled',
 }
+TITLE_GENERATION = 'title_generation'
+TAGS_GENERATION = 'tags_generation'
+FOLLOW_UP_GENERATION = 'follow_up_generation'
+SAFE_BACKGROUND_TASKS = {
+    TITLE_GENERATION,
+    TAGS_GENERATION,
+    FOLLOW_UP_GENERATION,
+}
+TITLE_MAX_LENGTH = 64
 
 
 class Pipe:
@@ -130,13 +139,108 @@ class Pipe:
         self._trim_runs_locked()
         return result
 
-    async def pipe(
+    @staticmethod
+    def _background_task_name(
+        body: dict[str, Any],
+        explicit_task: Any,
+        explicit_metadata: Any,
+    ) -> str | None:
+        metadata = body.get('metadata')
+        metadata = metadata if isinstance(metadata, dict) else {}
+        explicit_metadata = explicit_metadata if isinstance(explicit_metadata, dict) else {}
+        raw_task = explicit_task
+        if raw_task is None:
+            raw_task = explicit_metadata.get('task')
+        if raw_task is None:
+            raw_task = metadata.get('task')
+        if raw_task is None:
+            return None
+        task = str(raw_task).strip().lower()
+        if not task:
+            return None
+        return task.rsplit('.', 1)[-1]
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ''
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get('type') == 'text':
+                parts.append(str(item.get('text') or ''))
+        return ' '.join(parts)
+
+    @classmethod
+    def _deterministic_title(cls, *sources: Any) -> str:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            messages = source.get('messages')
+            if not isinstance(messages, list):
+                continue
+            for message in messages:
+                if not isinstance(message, dict) or message.get('role') != 'user':
+                    continue
+                title = ' '.join(cls._content_text(message.get('content')).split())
+                if not title:
+                    continue
+                if len(title) > TITLE_MAX_LENGTH:
+                    return f'{title[: TITLE_MAX_LENGTH - 3]}...'
+                return title
+        return '新对话'
+
+    @classmethod
+    def _background_task_response(
+        cls,
+        task: str,
+        body: dict[str, Any],
+        explicit_task_body: Any,
+        explicit_metadata: Any,
+    ) -> str:
+        if task not in SAFE_BACKGROUND_TASKS:
+            raise RuntimeError(f'Material Graph refuses unsupported Open WebUI background task: {task}')
+
+        metadata = body.get('metadata')
+        metadata = metadata if isinstance(metadata, dict) else {}
+        explicit_metadata = explicit_metadata if isinstance(explicit_metadata, dict) else {}
+        task_body = explicit_task_body
+        if not isinstance(task_body, dict):
+            task_body = explicit_metadata.get('task_body')
+        if not isinstance(task_body, dict):
+            task_body = metadata.get('task_body')
+
+        if task == TITLE_GENERATION:
+            value = {'title': cls._deterministic_title(task_body, body)}
+        elif task == TAGS_GENERATION:
+            value = {'tags': []}
+        elif task == FOLLOW_UP_GENERATION:
+            value = {'follow_ups': []}
+        else:
+            raise AssertionError(f'unhandled safe background task: {task}')
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+
+    async def pipe(  # noqa: C901 - background-task guard and streaming transport share this boundary
         self,
         body: dict[str, Any],
         __event_emitter__=None,
         __user__=None,
+        __task__=None,
+        __task_body__=None,
+        __metadata__=None,
         **_: Any,
     ) -> AsyncIterator[str]:
+        background_task = self._background_task_name(body, __task__, __metadata__)
+        if background_task is not None:
+            yield self._background_task_response(
+                background_task,
+                body,
+                __task_body__,
+                __metadata__,
+            )
+            return
+
         messages = body.get('messages') or []
         message = next(
             (str(item.get('content', '')) for item in reversed(messages) if item.get('role') == 'user'),

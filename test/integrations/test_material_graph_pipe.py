@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'backend'))
@@ -530,6 +531,132 @@ def test_explicit_demo_scenario_is_forwarded_without_becoming_the_default(monkey
         'polyimide_design',
         'pet_pa6_melt_spinning',
     ]
+
+
+def test_one_user_turn_posts_graph_once_and_background_tasks_never_post(  # noqa: C901
+    monkeypatch,
+):
+    graph_posts = []
+    monkeypatch.setattr(pipe_module, 'build_material_graph_auth_headers', lambda **_: {})
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            if False:
+                yield ''
+
+    class Stream:
+        async def __aenter__(self):
+            return Response()
+
+        async def __aexit__(self, *_):
+            return None
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def stream(self, method, url, **kwargs):
+            graph_posts.append((method, url, json.loads(kwargs['content'])))
+            return Stream()
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+    user = {'id': 'user-12345678', 'role': 'user'}
+    original_messages = [
+        {
+            'role': 'user',
+            'content': '请设计一种高 Tg 的聚酰亚胺，并给出实验安排。',
+        }
+    ]
+
+    async def invoke(body, **kwargs):
+        return [item async for item in pipe.pipe(body, __user__=user, **kwargs)]
+
+    assert (
+        asyncio.run(
+            invoke(
+                {
+                    'messages': original_messages,
+                }
+            )
+        )
+        == []
+    )
+    title = asyncio.run(
+        invoke(
+            {
+                'messages': [{'role': 'user', 'content': 'generated title prompt'}],
+                'metadata': {
+                    'task': 'title_generation',
+                    'task_body': {'messages': original_messages},
+                },
+            },
+        )
+    )
+    tags = asyncio.run(
+        invoke(
+            {'messages': [{'role': 'user', 'content': 'generated tags prompt'}]},
+            __task__='tags_generation',
+            __task_body__={'messages': original_messages},
+        )
+    )
+    follow_ups = asyncio.run(
+        invoke(
+            {'messages': [{'role': 'user', 'content': 'generated follow-up prompt'}]},
+            __task__='follow_up_generation',
+            __task_body__={'messages': original_messages},
+        )
+    )
+
+    assert len(graph_posts) == 1
+    assert graph_posts[0][0] == 'POST'
+    assert graph_posts[0][1].endswith('/chat/stream')
+    assert json.loads(''.join(title)) == {'title': '请设计一种高 Tg 的聚酰亚胺，并给出实验安排。'}
+    assert json.loads(''.join(tags)) == {'tags': []}
+    assert json.loads(''.join(follow_ups)) == {'follow_ups': []}
+
+
+def test_body_metadata_task_is_fail_closed_before_auth_or_network(monkeypatch):
+    client_created = False
+
+    class Client:
+        def __init__(self, **_):
+            nonlocal client_created
+            client_created = True
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+
+    async def invoke():
+        return [
+            item
+            async for item in pipe.pipe(
+                {
+                    'messages': [{'role': 'user', 'content': 'background prompt'}],
+                    'metadata': {'task': 'query_generation'},
+                }
+            )
+        ]
+
+    with pytest.raises(RuntimeError, match='background task'):
+        asyncio.run(invoke())
+    assert client_created is False
+
+
+def test_material_graph_shell_disables_nonessential_background_tasks_by_default():
+    dockerfile = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
+
+    assert 'ENABLE_FOLLOW_UP_GENERATION=false' in dockerfile
+    assert 'ENABLE_TAGS_GENERATION=false' in dockerfile
 
 
 def test_pipe_deduplicates_stream_final_per_call_and_preserves_final_only(  # noqa: C901
