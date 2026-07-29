@@ -41,7 +41,15 @@ def graph_snapshot(run_id, *, graph_version=1):
     }
 
 
-async def forward(pipe, event, client=None, *, resync_base_url=None, auth_headers=None):
+async def forward(
+    pipe,
+    event,
+    client=None,
+    *,
+    resync_base_url=None,
+    auth_headers=None,
+    expected_conversation_id=None,
+):
     emitted = []
 
     async def emitter(item):
@@ -56,6 +64,7 @@ async def forward(pipe, event, client=None, *, resync_base_url=None, auth_header
             client=client,
             resync_base_url=resync_base_url,
             auth_headers=auth_headers,
+            expected_conversation_id=expected_conversation_id,
         )
     ], emitted
 
@@ -260,6 +269,84 @@ def test_knowledge_signal_is_forwarded_without_mutating_execution_graph():
     )
     assert tokens == ['继续执行']
     assert no_signal_events == []
+
+
+def test_v2_knowledge_signal_without_action_is_forwarded():
+    _, events = asyncio.run(
+        forward(
+            Pipe(),
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'knowledge_signal',
+                'event_type': 'knowledge_signal',
+                'run_id': 'conversation-chat-1234',
+                'signal_version': 1,
+                'nodes': [{'id': 'evidence:E1', 'type': 'evidence'}],
+                'edges': [
+                    {
+                        'id': 'provenance:E1:S1',
+                        'source': 'evidence:E1',
+                        'target': 'source:S1',
+                        'predicate': 'provenance',
+                    }
+                ],
+            },
+        )
+    )
+
+    assert events == [
+        {
+            'type': 'status',
+            'data': {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'knowledge_signal',
+                'event_type': 'knowledge_signal',
+                'action': 'material_graph_knowledge',
+                'run_id': 'conversation-chat-1234',
+                'signal_version': 1,
+                'nodes': [{'id': 'evidence:E1', 'type': 'evidence'}],
+                'edges': [
+                    {
+                        'id': 'provenance:E1:S1',
+                        'source': 'evidence:E1',
+                        'target': 'source:S1',
+                        'predicate': 'provenance',
+                    }
+                ],
+            },
+        }
+    ]
+
+
+def test_conversation_done_caches_state_without_emitting_empty_workflow_status():
+    pipe = Pipe()
+    conversation_state = {
+        'schema': 'material_graph.conversation_state.v1',
+        'mode': 'research_discussion',
+        'task_state': {'material_family': 'PI'},
+    }
+
+    tokens, events = asyncio.run(
+        forward(
+            pipe,
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'done',
+                'event_type': 'done',
+                'run_id': 'chat-1234',
+                'conversation_id': 'chat-1234',
+                'mode': 'research_discussion',
+                'conversation_state': conversation_state,
+                'done': True,
+            },
+            expected_conversation_id='chat-1234',
+        )
+    )
+
+    assert tokens == []
+    assert events == []
+    assert pipe._cached_conversation_state('chat-1234') == conversation_state
+    assert 'chat-1234' not in pipe._runs
 
 
 def test_token_and_non_success_terminal():
@@ -574,9 +661,23 @@ def test_pipe_signs_authenticated_user_and_uses_same_origin_resume_proxy(  # noq
         return [
             item
             async for item in pipe.pipe(
-                {'messages': [{'role': 'user', 'content': 'design'}]},
+                {
+                    'messages': [
+                        {'role': 'system', 'content': 'private system prompt'},
+                        {'role': 'user', 'content': 'Earlier question'},
+                        {'role': 'assistant', 'content': 'Earlier answer'},
+                        {
+                            'role': 'user',
+                            'content': [
+                                {'type': 'text', 'text': 'design'},
+                                {'type': 'image_url', 'image_url': {'url': 'https://private.example/image'}},
+                            ],
+                        },
+                    ]
+                },
                 __event_emitter__=emitter,
                 __user__={'id': 'user-12345678', 'role': 'user'},
+                __metadata__={'chat_id': 'chat-1234'},
             )
         ]
 
@@ -588,9 +689,185 @@ def test_pipe_signs_authenticated_user_and_uses_same_origin_resume_proxy(  # noq
         'message': 'design',
         'scenario': 'custom',
         'auto_approve': False,
+        'history': [
+            {'role': 'user', 'content': 'Earlier question'},
+            {'role': 'assistant', 'content': 'Earlier answer'},
+        ],
+        'conversation_id': 'chat-1234',
     }
     assert emitted[0]['data']['endpoint'] == '/api/v1/material-graph'
     load_material_graph_hmac_secret.cache_clear()
+
+
+def test_pipe_reuses_only_bounded_conversation_state_for_the_same_chat(monkeypatch):  # noqa: C901
+    monkeypatch.setattr(pipe_module, 'build_material_graph_auth_headers', lambda **_: {})
+    posted_payloads = []
+    response_events = [
+        [
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'assistant_message',
+                'event_type': 'assistant_message',
+                'run_id': 'chat-1234',
+                'conversation_id': 'chat-1234',
+                'content_mode': 'final',
+                'content': '请继续补充目标。',
+            },
+            {
+                'contract_version': 'material-graph.sse.v2',
+                'type': 'done',
+                'event_type': 'done',
+                'run_id': 'chat-1234',
+                'conversation_id': 'chat-1234',
+                'status': 'completed',
+                'files': [{'url': 'https://private.example/result'}],
+                'conversation_state': {
+                    'schema': 'material_graph.conversation_state.v1',
+                    'mode': 'research_discussion',
+                    'task_state': {
+                        'material_family': 'PI',
+                        'status': {'secret': 'must not be cached'},
+                        'files': [{'url': 'https://private.example/source'}],
+                    },
+                },
+                'done': True,
+            },
+        ],
+        [],
+        [],
+    ]
+
+    class Response:
+        def __init__(self, events):
+            self.events = events
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for event in self.events:
+                yield f'data: {json.dumps(event, ensure_ascii=False)}'
+                yield ''
+
+    class Stream:
+        def __init__(self, events):
+            self.response = Response(events)
+
+        async def __aenter__(self):
+            return self.response
+
+        async def __aexit__(self, *_):
+            return None
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def stream(self, _method, _url, **kwargs):
+            posted_payloads.append(json.loads(kwargs['content']))
+            return Stream(response_events.pop(0))
+
+    monkeypatch.setattr(pipe_module.httpx, 'AsyncClient', Client)
+    pipe = Pipe()
+    user = {'id': 'user-12345678', 'role': 'user'}
+
+    async def invoke(chat_id, messages):
+        return [
+            item
+            async for item in pipe.pipe(
+                {'messages': messages},
+                __user__=user,
+                __metadata__={'chat_id': chat_id},
+            )
+        ]
+
+    first_messages = [{'role': 'user', 'content': '我想做 PI 材料'}]
+    assert asyncio.run(invoke('chat-1234', first_messages)) == ['请继续补充目标。']
+
+    second_messages = [
+        *first_messages,
+        {'role': 'assistant', 'content': '请继续补充目标。'},
+        {'role': 'user', 'content': '继续'},
+    ]
+    assert asyncio.run(invoke('chat-1234', second_messages)) == []
+    assert asyncio.run(invoke('chat-other', second_messages)) == []
+
+    assert 'conversation_state' not in posted_payloads[0]
+    assert posted_payloads[1]['conversation_state'] == {
+        'schema': 'material_graph.conversation_state.v1',
+        'mode': 'research_discussion',
+        'task_state': {'material_family': 'PI'},
+    }
+    assert 'conversation_state' not in posted_payloads[2]
+    assert 'private.example' not in json.dumps(posted_payloads[1], ensure_ascii=False)
+    assert all(key not in posted_payloads[1] for key in ('status', 'files'))
+
+
+def test_conversation_context_is_recent_plain_text_and_bounded():
+    pipe = Pipe()
+    messages = [
+        {'role': 'system', 'content': 'must never be forwarded'},
+        *[
+            {
+                'role': 'user' if index % 2 == 0 else 'assistant',
+                'content': [
+                    {'type': 'text', 'text': f'context-{index}'},
+                    {'type': 'image_url', 'image_url': {'url': f'https://private.example/{index}'}},
+                ],
+                'statusHistory': [{'secret': 'must not leak'}],
+            }
+            for index in range(30)
+        ],
+        {'role': 'user', 'content': 'current request'},
+    ]
+
+    history = pipe._conversation_history(messages)
+
+    assert len(history) == 24
+    assert history[0] == {'role': 'user', 'content': 'context-6'}
+    assert history[-1] == {'role': 'assistant', 'content': 'context-29'}
+    assert all(set(item) == {'role', 'content'} for item in history)
+    assert all('private.example' not in item['content'] for item in history)
+    assert all(len(item['content']) <= pipe_module.HISTORY_MAX_CONTENT_CHARS for item in history)
+    assert sum(len(item['content'].encode('utf-8')) for item in history) <= pipe_module.HISTORY_MAX_CONTENT_BYTES
+
+
+@pytest.mark.parametrize(
+    ('chat_id', 'expected'),
+    [
+        ('chat-1234', 'chat-1234'),
+        (' local:session_1 ', 'local:session_1'),
+        ('contains whitespace', None),
+        ('../unsafe', None),
+        ('x' * 129, None),
+    ],
+)
+def test_conversation_id_is_safe_and_bounded(chat_id, expected):
+    assert Pipe._conversation_id({}, {'chat_id': chat_id}) == expected
+
+
+def test_conversation_history_enforces_utf8_byte_budget():
+    history = Pipe._conversation_history(
+        [
+            *[
+                {
+                    'role': 'assistant',
+                    'content': '高' * pipe_module.HISTORY_MAX_CONTENT_CHARS,
+                }
+                for _ in range(24)
+            ],
+            {'role': 'user', 'content': 'current request'},
+        ]
+    )
+
+    assert all(len(item['content']) <= pipe_module.HISTORY_MAX_CONTENT_CHARS for item in history)
+    assert sum(len(item['content'].encode('utf-8')) for item in history) <= pipe_module.HISTORY_MAX_CONTENT_BYTES
 
 
 def test_explicit_demo_scenario_is_forwarded_without_becoming_the_default(monkeypatch):  # noqa: C901

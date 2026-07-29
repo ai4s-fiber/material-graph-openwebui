@@ -130,6 +130,78 @@ describe('Material knowledge graph contract', () => {
 		expect(graph?.nodes[0]?.agentView).toBe('material');
 	});
 
+	it('normalizes an explicit empty knowledge signal without inventing graph entities', () => {
+		const graph = normalizeKnowledgeGraph({
+			type: 'knowledge_signal',
+			event_type: 'knowledge_signal',
+			run_id: 'empty-run',
+			nodes: [],
+			edges: [],
+			stats: { total_nodes: 0, total_edges: 0 }
+		});
+
+		expect(graph).toMatchObject({
+			runId: 'empty-run',
+			nodes: [],
+			edges: [],
+			receivedNodeCount: 0,
+			receivedEdgeCount: 0,
+			omittedNodeCount: 0,
+			omittedEdgeCount: 0,
+			truncated: false
+		});
+	});
+
+	it('uses the latest explicit empty knowledge signal to clear an older graph', () => {
+		const graph = latestKnowledgeGraph({
+			messages: {
+				one: {
+					statusHistory: [
+						{
+							event: {
+								type: 'status',
+								data: {
+									event_type: 'knowledge_signal',
+									run_id: 'populated-run',
+									nodes: [{ id: 'stale-node', label: 'Stale', agent_roles: ['material'] }],
+									edges: []
+								}
+							}
+						},
+						{
+							event: {
+								type: 'status',
+								data: {
+									event_type: 'knowledge_signal',
+									run_id: 'empty-run',
+									nodes: [],
+									edges: []
+								}
+							}
+						},
+						{
+							event: {
+								type: 'status',
+								data: { event_type: 'progress', nodes: [], edges: [] }
+							}
+						}
+					]
+				}
+			}
+		});
+
+		expect(graph).toMatchObject({
+			runId: 'empty-run',
+			nodes: [],
+			edges: [],
+			receivedNodeCount: 0,
+			receivedEdgeCount: 0
+		});
+		expect(
+			normalizeKnowledgeGraph({ type: 'status', event_type: 'progress', nodes: [], edges: [] })
+		).toBeNull();
+	});
+
 	it('does not invent nodes from workflow or task-subgraph counts', () => {
 		expect(
 			normalizeKnowledgeGraph({

@@ -110,7 +110,7 @@ const selectedIds = (items: unknown[], keys: string[]) => {
 	return result;
 };
 
-/** Normalize only explicit backend graph entities; counters never create UI entities. */
+/** Normalize explicit backend graph entities, including authoritative empty knowledge signals. */
 export const normalizeKnowledgeGraph = (raw: unknown): MaterialGraphKnowledgeGraph | null => {
 	const payload = eventPayload(raw);
 	if (
@@ -167,7 +167,6 @@ export const normalizeKnowledgeGraph = (raw: unknown): MaterialGraphKnowledgeGra
 			metadata: row.metadata ?? row.provenance ?? undefined
 		});
 	}
-	if (!nodes.length) return null;
 
 	const nodeById = new Map(nodes.map((node) => [node.id, node]));
 	const edges: MaterialGraphKnowledgeEdge[] = [];
